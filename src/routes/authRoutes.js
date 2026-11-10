@@ -75,4 +75,15 @@ router.post('/prijava', async (req, res) => {
     password: lozinka
   });
 
-  if (error || !data.user || !data.session) {
+  if (error || !data.user || !data.session) {
+    return res.status(401).json({ greska: 'Neispravan email ili lozinka.' });
+  }
+
+  return res.json({
+    poruka: 'Prijava je uspešna.',
+    token: data.session.access_token,
+    korisnik: { id: data.user.id, email: data.user.email }
+  });
+});
+
+module.exports = router;
