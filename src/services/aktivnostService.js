@@ -6,7 +6,6 @@ async function pregledAktivnosti(supabase) {
     .order("kreirano_at", { ascending: false });
 
   if (error) throw error;
-
   return data;
 }
 
@@ -18,7 +17,6 @@ async function aktivnostPoId(supabase, aktivnostId) {
     .maybeSingle();
 
   if (error) throw error;
-
   if (!data) return null;
 
   const { count, error: countError } = await supabase
@@ -55,12 +53,39 @@ async function kreirajAktivnost(supabase, profesorId, unos) {
     .single();
 
   if (error) throw error;
-
   return data;
 }
 
-async function urediAktivnost(supabase, profesorId, aktivnostId, unos) {
-  if (Object.prototype.hasOwnProperty.call(unos, "maksimalno_mesta")) {
+async function urediAktivnost(
+  supabase,
+  profesorId,
+  aktivnostId,
+  unos
+) {
+  const { data: postojeca, error: proveraGreska } =
+    await supabase
+      .from("aktivnosti")
+      .select("id")
+      .eq("id", aktivnostId)
+      .eq("profesor_id", profesorId)
+      .maybeSingle();
+
+  if (proveraGreska) throw proveraGreska;
+
+  if (!postojeca) {
+    const greska = new Error(
+      "Aktivnost nije pronađena ili nemate dozvolu."
+    );
+    greska.status = 404;
+    throw greska;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(
+      unos,
+      "maksimalno_mesta"
+    )
+  ) {
     const { count, error: countError } = await supabase
       .from("prijave")
       .select("id", { count: "exact", head: true })
@@ -71,7 +96,7 @@ async function urediAktivnost(supabase, profesorId, aktivnostId, unos) {
 
     if (unos.maksimalno_mesta < (count || 0)) {
       const greska = new Error(
-        "Broj mesta ne može biti manji od broja aktivnih prijava."
+        "Broj mesta ne može biti manji od broja prijavljenih."
       );
       greska.status = 409;
       throw greska;
@@ -89,9 +114,7 @@ async function urediAktivnost(supabase, profesorId, aktivnostId, unos) {
   if (error) throw error;
 
   if (!data) {
-    const greska = new Error(
-      "Aktivnost nije pronađena ili nemate dozvolu da je menjate."
-    );
+    const greska = new Error("Aktivnost nije pronađena.");
     greska.status = 404;
     throw greska;
   }
@@ -99,7 +122,11 @@ async function urediAktivnost(supabase, profesorId, aktivnostId, unos) {
   return data;
 }
 
-async function deaktivirajAktivnost(supabase, profesorId, aktivnostId) {
+async function deaktivirajAktivnost(
+  supabase,
+  profesorId,
+  aktivnostId
+) {
   const { data, error } = await supabase
     .from("aktivnosti")
     .update({ aktivna: false })
@@ -112,7 +139,7 @@ async function deaktivirajAktivnost(supabase, profesorId, aktivnostId) {
 
   if (!data) {
     const greska = new Error(
-      "Aktivnost nije pronađena ili nemate dozvolu da je deaktivirate."
+      "Aktivnost nije pronađena ili nemate dozvolu."
     );
     greska.status = 404;
     throw greska;
@@ -121,8 +148,15 @@ async function deaktivirajAktivnost(supabase, profesorId, aktivnostId) {
   return data;
 }
 
-async function prijaveAktivnosti(supabase, profesorId, aktivnostId) {
-  const aktivnost = await aktivnostPoId(supabase, aktivnostId);
+async function prijaveAktivnosti(
+  supabase,
+  profesorId,
+  aktivnostId
+) {
+  const aktivnost = await aktivnostPoId(
+    supabase,
+    aktivnostId
+  );
 
   if (!aktivnost) {
     const greska = new Error("Aktivnost nije pronađena.");
@@ -131,31 +165,18 @@ async function prijaveAktivnosti(supabase, profesorId, aktivnostId) {
   }
 
   if (aktivnost.profesor_id !== profesorId) {
-    const greska = new Error("Nemate dozvolu da upravljate prijavama ove aktivnosti.");
+    const greska = new Error(
+      "Nemate dozvolu za pregled prijava."
+    );
     greska.status = 403;
     throw greska;
   }
 
-  if (statusPrijave === "prijavljen") {
-    const { count, error: countError } = await supabase
-      .from("prijave")
-      .select("id", { count: "exact", head: true })
-      .eq("aktivnost_id", aktivnostId)
-      .eq("status_prijave", "prijavljen")
-      .neq("id", prijavaId);
-
-    if (countError) throw countError;
-
-    if ((count || 0) >= aktivnost.maksimalno_mesta) {
-      const greska = new Error("Nema slobodnih mesta za ovu prijavu.");
-      greska.status = 409;
-      throw greska;
-    }
-  }
-
   const { data, error } = await supabase
     .from("prijave")
-    .select("id, ucenik_id, status_prijave, prijavljen_at")
+    .select(
+      "id, ucenik_id, status_prijave, prijavljen_at"
+    )
     .eq("aktivnost_id", aktivnostId)
     .order("prijavljen_at", { ascending: false });
 
@@ -170,7 +191,10 @@ async function azurirajPrijavu(
   prijavaId,
   statusPrijave
 ) {
-  const aktivnost = await aktivnostPoId(supabase, aktivnostId);
+  const aktivnost = await aktivnostPoId(
+    supabase,
+    aktivnostId
+  );
 
   if (!aktivnost) {
     const greska = new Error("Aktivnost nije pronađena.");
@@ -179,9 +203,49 @@ async function azurirajPrijavu(
   }
 
   if (aktivnost.profesor_id !== profesorId) {
-    const greska = new Error("Nemate dozvolu da upravljate prijavama ove aktivnosti.");
+    const greska = new Error(
+      "Nemate dozvolu da upravljate prijavama."
+    );
     greska.status = 403;
     throw greska;
+  }
+
+  const { data: postojeca, error: proveraGreska } =
+    await supabase
+      .from("prijave")
+      .select("id, status_prijave")
+      .eq("id", prijavaId)
+      .eq("aktivnost_id", aktivnostId)
+      .maybeSingle();
+
+  if (proveraGreska) throw proveraGreska;
+
+  if (!postojeca) {
+    const greska = new Error("Prijava nije pronađena.");
+    greska.status = 404;
+    throw greska;
+  }
+
+  if (
+    statusPrijave === "prijavljen" &&
+    postojeca.status_prijave !== "prijavljen"
+  ) {
+    const { count, error: countError } = await supabase
+      .from("prijave")
+      .select("id", { count: "exact", head: true })
+      .eq("aktivnost_id", aktivnostId)
+      .eq("status_prijave", "prijavljen")
+      .neq("id", prijavaId);
+
+    if (countError) throw countError;
+
+    if ((count || 0) >= aktivnost.maksimalno_mesta) {
+      const greska = new Error(
+        "Nema slobodnih mesta za ovu prijavu."
+      );
+      greska.status = 409;
+      throw greska;
+    }
   }
 
   const { data, error } = await supabase
@@ -203,8 +267,11 @@ async function azurirajPrijavu(
   return data;
 }
 
-// BEZBEDNA PRIJAVA UCENIKA
-async function prijaviUcenika(supabase, ucenikId, aktivnostId) {
+async function prijaviUcenika(
+  supabase,
+  ucenikId,
+  aktivnostId
+) {
   const { data, error } = await supabase.rpc(
     "bezbedna_prijava",
     {
@@ -243,21 +310,24 @@ async function prijaviUcenika(supabase, ucenikId, aktivnostId) {
   return data;
 }
 
-// OTKAZIVANJE PRIJAVE
-async function otkaziPrijavu(supabase, ucenikId, aktivnostId) {
+async function otkaziPrijavu(
+  supabase,
+  ucenikId,
+  aktivnostId
+) {
   const { data, error } = await supabase
     .from("prijave")
-    .update({
-      status_prijave: "otkazano"
-    })
+    .update({ status_prijave: "otkazano" })
     .eq("ucenik_id", ucenikId)
     .eq("aktivnost_id", aktivnostId)
-    .in("status_prijave", ["prijavljen", "na_cekanju"])
+    .in("status_prijave", [
+      "prijavljen",
+      "na_cekanju"
+    ])
     .select("id")
     .maybeSingle();
 
   if (error) throw error;
-
   return data;
 }
 

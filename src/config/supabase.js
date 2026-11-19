@@ -1,39 +1,67 @@
-const { createClient } = require('@supabase/supabase-js');
+
+const { createClient } = require("@supabase/supabase-js");
+
+require("dotenv").config();
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseServiceRoleKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
+if (
+  !supabaseUrl ||
+  !supabaseAnonKey ||
+  !supabaseServiceRoleKey
+) {
   throw new Error(
-    'Nedostaju SUPABASE_URL, SUPABASE_ANON_KEY ili SUPABASE_SERVICE_ROLE_KEY.'
+    "Nedostaju Supabase promenljive u .env fajlu."
   );
 }
 
-const authSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+const opcije = {
   auth: {
     autoRefreshToken: false,
-    persistSession: false
+    persistSession: false,
+    detectSessionInUrl: false
   }
-});
+};
+
+const authSupabase = createClient(
+  supabaseUrl,
+  supabaseAnonKey,
+  opcije
+);
+
+const dbSupabase = createClient(
+  supabaseUrl,
+  supabaseServiceRoleKey,
+  opcije
+);
 
 function createUserSupabase(accessToken) {
-  return createClient(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false
-    },
-    global: {
-      headers: { Authorization: `Bearer ${accessToken}` }
+  if (
+    typeof accessToken !== "string" ||
+    !accessToken.trim()
+  ) {
+    throw new Error("Pristupni token je obavezan.");
+  }
+
+  return createClient(
+    supabaseUrl,
+    supabaseAnonKey,
+    {
+      ...opcije,
+      global: {
+        headers: {
+          Authorization: `Bearer ${accessToken.trim()}`
+        }
+      }
     }
-  });
+  );
 }
 
-const dbSupabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false
-  }
-});
-
-module.exports = { authSupabase, createUserSupabase, dbSupabase };
+module.exports = {
+  authSupabase,
+  dbSupabase,
+  createUserSupabase
+};

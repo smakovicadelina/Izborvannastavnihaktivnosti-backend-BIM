@@ -1,14 +1,16 @@
+
 const express = require("express");
+
 const kontroler = require("../controllers/aktivnostController");
 const zahtevajPrijavu = require("../middleware/zahtevajPrijavu");
 const zahtevajUlogu = require("../middleware/zahtevajUlogu");
 
 const router = express.Router();
 
-// PREGLED AKTIVNOSTI
+// PREGLED SVIH AKTIVNOSTI
 router.get("/", kontroler.pregled);
 
-// BROJ SLOBODNIH MESTA
+// SLOBODNA MESTA
 router.get(
   "/:aktivnostId/mesta",
   zahtevajPrijavu,
@@ -23,7 +25,7 @@ router.post(
   kontroler.kreiranje
 );
 
-// PROFESOR - UREDJIVANJE AKTIVNOSTI
+// PROFESOR - UREDJIVANJE
 router.patch(
   "/:aktivnostId",
   zahtevajPrijavu,
@@ -31,7 +33,7 @@ router.patch(
   kontroler.uredivanje
 );
 
-// PROFESOR - DEAKTIVACIJA AKTIVNOSTI
+// PROFESOR - DEAKTIVACIJA
 router.patch(
   "/:aktivnostId/deaktiviraj",
   zahtevajPrijavu,
@@ -39,7 +41,7 @@ router.patch(
   kontroler.deaktiviranje
 );
 
-// PROFESOR - PREGLED I AZURIRANJE PRIJAVA
+// PROFESOR - PREGLED PRIJAVA
 router.get(
   "/:aktivnostId/prijave",
   zahtevajPrijavu,
@@ -47,6 +49,7 @@ router.get(
   kontroler.prijaveAktivnosti
 );
 
+// PROFESOR - PROMENA STATUSA PRIJAVE
 router.patch(
   "/:aktivnostId/prijave/:prijavaId",
   zahtevajPrijavu,

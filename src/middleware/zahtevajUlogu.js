@@ -13,7 +13,7 @@ function zahtevajUlogu(...dozvoljeneUloge) {
       });
     }
 
-    next();
+    return next();
   };
 }
 

@@ -1,15 +1,13 @@
 
 const express = require("express");
-const {
-  authSupabase,
-  dbSupabase
-} = require("../config/supabase");
-
+const { authSupabase, dbSupabase } = require("../config/supabase");
 const zahtevajPrijavu = require("../middleware/zahtevajPrijavu");
 
 const router = express.Router();
 
-// REGISTRACIJA
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// REGISTRACIJA UCENIKA
 router.post("/registracija", async (req, res) => {
   try {
     const body = req.body || {};
@@ -34,7 +32,7 @@ router.post("/registracija", async (req, res) => {
       });
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (!EMAIL_REGEX.test(email)) {
       return res.status(400).json({
         greska: "Unesite ispravnu email adresu."
       });
@@ -49,7 +47,6 @@ router.post("/registracija", async (req, res) => {
       });
     }
 
-    // Korisnik ne može sam sebi dodeliti ulogu profesora.
     const { data, error } = await authSupabase.auth.signUp({
       email,
       password: lozinka,
@@ -70,43 +67,45 @@ router.post("/registracija", async (req, res) => {
       });
     }
 
-    // Provera da li je profil već kreiran triggerom.
     const { data: postojeci, error: proveraGreska } =
       await dbSupabase
         .from("korisnici")
-        .select("id")
+        .select("id, ime_i_prezime, uloga")
         .eq("id", data.user.id)
         .maybeSingle();
 
-    if (proveraGreska) {
-      throw proveraGreska;
-    }
+    if (proveraGreska) throw proveraGreska;
 
-    if (!postojeci) {
-      const { error: profilGreska } = await dbSupabase
-        .from("korisnici")
-        .insert({
-          id: data.user.id,
-          ime_i_prezime,
-          uloga: "ucenik"
-        });
+    let profil = postojeci;
+
+    if (!profil) {
+      const { data: noviProfil, error: profilGreska } =
+        await dbSupabase
+          .from("korisnici")
+          .insert({
+            id: data.user.id,
+            ime_i_prezime,
+            uloga: "ucenik"
+          })
+          .select("id, ime_i_prezime, uloga")
+          .single();
 
       if (profilGreska) {
-        console.error("Greška profila:", profilGreska);
+        console.error("Kreiranje profila:", profilGreska);
 
         return res.status(500).json({
-          greska: "Auth nalog je kreiran, ali profil nije upisan. Kontaktirajte administratora."
+          greska: "Nalog je kreiran, ali profil nije upisan."
         });
       }
+
+      profil = noviProfil;
     }
 
     return res.status(201).json({
       poruka: "Registracija je uspešna.",
       korisnik: {
-        id: data.user.id,
-        email: data.user.email,
-        ime_i_prezime,
-        uloga: "ucenik"
+        ...profil,
+        email: data.user.email
       },
       token: data.session?.access_token || null,
       refresh_token: data.session?.refresh_token || null,
@@ -122,19 +121,19 @@ router.post("/registracija", async (req, res) => {
   }
 });
 
-// LOGIN
+// PRIJAVA
 router.post("/prijava", async (req, res) => {
   try {
     const { email, lozinka } = req.body || {};
 
     if (
       typeof email !== "string" ||
+      !EMAIL_REGEX.test(email.trim()) ||
       typeof lozinka !== "string" ||
-      !email.trim() ||
       !lozinka
     ) {
       return res.status(400).json({
-        greska: "Email i lozinka su obavezni."
+        greska: "Unesite ispravan email i lozinku."
       });
     }
 
@@ -146,7 +145,7 @@ router.post("/prijava", async (req, res) => {
 
     if (error || !data.user || !data.session) {
       return res.status(401).json({
-        greska: "Pogrešan email, lozinka ili nepotvrđen nalog."
+        greska: "Pogrešni podaci ili nalog nije potvrđen."
       });
     }
 
@@ -157,7 +156,9 @@ router.post("/prijava", async (req, res) => {
         .eq("id", data.user.id)
         .maybeSingle();
 
-    if (profilGreska || !profil) {
+    if (profilGreska) throw profilGreska;
+
+    if (!profil) {
       return res.status(403).json({
         greska: "Korisnički profil nije pronađen."
       });
@@ -183,43 +184,25 @@ router.post("/prijava", async (req, res) => {
   }
 });
 
-// TRENUTNO PRIJAVLJENI KORISNIK
-router.get("/me", zahtevajPrijavu, async (req, res) => {
-  try {
-    const { data: profil, error } = await dbSupabase
-      .from("korisnici")
-      .select("id, ime_i_prezime, uloga, razred_odeljenje")
-      .eq("id", req.korisnik.id)
-      .maybeSingle();
-
-    if (error || !profil) {
-      return res.status(404).json({
-        greska: "Profil nije pronađen."
-      });
+// TRENUTNI KORISNIK
+router.get("/me", zahtevajPrijavu, (req, res) => {
+  return res.status(200).json({
+    korisnik: {
+      ...req.profil,
+      email: req.korisnik.email
     }
-
-    return res.json({
-      korisnik: {
-        ...profil,
-        email: req.korisnik.email
-      }
-    });
-
-  } catch (error) {
-    console.error("Profil:", error);
-
-    return res.status(500).json({
-      greska: "Greška pri učitavanju profila."
-    });
-  }
+  });
 });
 
-// OSVEŽAVANJE SESIJE
+// OSVEZAVANJE TOKENA
 router.post("/osvezi-token", async (req, res) => {
   try {
     const refresh_token = req.body?.refresh_token;
 
-    if (typeof refresh_token !== "string" || !refresh_token) {
+    if (
+      typeof refresh_token !== "string" ||
+      !refresh_token.trim()
+    ) {
       return res.status(400).json({
         greska: "Refresh token je obavezan."
       });
@@ -236,7 +219,7 @@ router.post("/osvezi-token", async (req, res) => {
       });
     }
 
-    return res.json({
+    return res.status(200).json({
       token: data.session.access_token,
       refresh_token: data.session.refresh_token,
       expires_at: data.session.expires_at

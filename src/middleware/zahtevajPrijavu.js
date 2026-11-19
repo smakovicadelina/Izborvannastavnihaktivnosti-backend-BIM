@@ -1,27 +1,30 @@
 
-const { authSupabase, dbSupabase } = require("../config/supabase");
+const {
+  authSupabase,
+  dbSupabase
+} = require("../config/supabase");
 
 async function zahtevajPrijavu(req, res, next) {
   try {
-    const authorization = req.headers.authorization || "";
+    const authorization =
+      req.headers.authorization || "";
 
-    if (!authorization.startsWith("Bearer ")) {
+    const match = /^Bearer\s+(\S+)$/i.exec(
+      authorization.trim()
+    );
+
+    if (!match) {
       return res.status(401).json({
         greska: "Morate biti prijavljeni."
       });
     }
 
-    const token = authorization.slice(7).trim();
+    const token = match[1];
 
-    if (!token) {
-      return res.status(401).json({
-        greska: "Token nije pronađen."
-      });
-    }
+    const { data, error } =
+      await authSupabase.auth.getUser(token);
 
-    const { data, error } = await authSupabase.auth.getUser(token);
-
-    if (error || !data.user) {
+    if (error || !data?.user) {
       return res.status(401).json({
         greska: "Nevažeći ili istekao token."
       });
@@ -30,11 +33,18 @@ async function zahtevajPrijavu(req, res, next) {
     const { data: profil, error: profilGreska } =
       await dbSupabase
         .from("korisnici")
-        .select("id, ime_i_prezime, uloga, razred_odeljenje")
+        .select(
+          "id, ime_i_prezime, uloga, razred_odeljenje"
+        )
         .eq("id", data.user.id)
         .maybeSingle();
 
     if (profilGreska) {
+      console.error(
+        "Provera korisničkog profila:",
+        profilGreska
+      );
+
       return res.status(500).json({
         greska: "Greška pri proveri korisnika."
       });
@@ -49,7 +59,7 @@ async function zahtevajPrijavu(req, res, next) {
     req.korisnik = data.user;
     req.profil = profil;
 
-    next();
+    return next();
   } catch (error) {
     console.error("Autentifikacija:", error);
 
