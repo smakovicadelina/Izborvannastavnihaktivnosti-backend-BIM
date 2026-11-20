@@ -11,7 +11,7 @@ function greska(res, error) {
 
   const status = [400, 403, 404, 409].includes(error.status)
     ? error.status
-    : error.code === "23505"
+    : ["23505", "23503", "23514", "23P01", "P0001"].includes(error.code)
       ? 409
       : 500;
 

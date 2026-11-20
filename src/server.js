@@ -20,8 +20,16 @@ const swaggerSpec = swaggerJsdoc({
     openapi: "3.0.3",
     info: {
       title: "API za vannastavne aktivnosti",
-      version: "1.2.0"
-    }
+      version: "1.2.0",
+      description:
+        "REST API za aktivnosti, prijave, termine i prostorije. Za zaštićene rute unesite Supabase access token kroz dugme Authorize."
+    },
+    servers: [
+      {
+        url: "/",
+        description: "Trenutni server"
+      }
+    ]
   },
   apis: [
     path.join(__dirname, "openapi.js"),
@@ -31,28 +39,34 @@ const swaggerSpec = swaggerJsdoc({
 
 app.disable("x-powered-by");
 
-const dozvoljeniOrigin = [
-  ...(
-    process.env.CORS_ORIGIN ||
-    process.env.FRONTEND_ORIGIN ||
-    "http://localhost:5173"
-  )
-    .split(",")
-    .map(origin => origin.trim())
-    .filter(Boolean),
+function normalizujOrigin(origin) {
+  try {
+    return new URL(origin).origin;
+  } catch {
+    return null;
+  }
+}
+
+const konfigurisaniOrigini = [
+  process.env.CORS_ORIGIN,
+  process.env.FRONTEND_ORIGIN
+]
+  .filter(Boolean)
+  .flatMap(value => value.split(","));
+
+const dozvoljeniOrigin = new Set([
+  ...konfigurisaniOrigini,
+  "http://localhost:5173",
   `http://localhost:${port}`,
   `http://127.0.0.1:${port}`
-];
+]
+  .map(origin => normalizujOrigin(origin.trim()))
+  .filter(Boolean));
 
 app.use(
   cors({
     origin(origin, callback) {
-      console.log("CORS PROVJERA:", {
-  origin,
-  dozvoljeniOrigin,
-  port
-});
-      if (!origin || dozvoljeniOrigin.includes(origin)) {
+      if (!origin || dozvoljeniOrigin.has(normalizujOrigin(origin))) {
         return callback(null, true);
       }
 
@@ -156,7 +170,8 @@ app.use((err, req, res, next) => {
 
   if (
     err.code === "23514" ||
-    err.code === "P0001"
+    err.code === "P0001" ||
+    err.code === "23P01"
   ) {
     return res.status(409).json({
       greska: "Radnja nije dozvoljena zbog ograničenja sistema."

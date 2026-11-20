@@ -1,15 +1,5 @@
 /**
  * @openapi
- * openapi: 3.0.3
- * info:
- *   title: API za vannastavne aktivnosti
- *   version: 1.2.0
- *   description: |
- *     REST API za aktivnosti, prijave, termine i prostorije.
- *     Za zaštićene rute unesite Supabase access token kroz dugme Authorize.
- * servers:
- *   - url: /
- *     description: Trenutni server
  * tags:
  *   - name: Opšte
  *   - name: Autentifikacija
@@ -43,7 +33,7 @@
  *           example: Ana Anić
  *         uloga:
  *           type: string
- *           enum: [ucenik, profesor, administrator]
+ *           enum: [ucenik, profesor]
  *           example: ucenik
  *         email:
  *           type: string
@@ -53,6 +43,23 @@
  *           type: string
  *           nullable: true
  *           example: 2-1
+ *     ZahtevZaProfesora:
+ *       type: object
+ *       properties:
+ *         id:
+ *           type: integer
+ *           example: 17
+ *         status:
+ *           type: string
+ *           enum: [na_cekanju, odobren, odbijen]
+ *           example: na_cekanju
+ *         kreiran_at:
+ *           type: string
+ *           format: date-time
+ *         obradjen_at:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
  *     Aktivnost:
  *       type: object
  *       properties:
@@ -204,11 +211,35 @@
  *               example:
  *                 status: ok
  *                 poruka: Backend server radi!
+ *   /api/test-verzija:
+ *     get:
+ *       tags: [Opšte]
+ *       summary: Provjera aktivne verzije backend-a
+ *       responses:
+ *         "200":
+ *           description: Identifikator verzije servera.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 verzija: NOVA_VERZIJA_37
+ *   /api-docs.json:
+ *     get:
+ *       tags: [Opšte]
+ *       summary: OpenAPI specifikacija
+ *       responses:
+ *         "200":
+ *           description: OpenAPI dokument za ovaj API.
+ *           content:
+ *             application/json:
+ *               schema:
+ *                 type: object
  *   /api/auth/registracija:
  *     post:
  *       tags: [Autentifikacija]
- *       summary: Registracija učenika
- *       description: Kreira nalog preko postojećeg Supabase Auth servisa.
+ *       summary: Registracija učenika ili zahtjev za profesorski nalog
+ *       description: |
+ *         Uloga profesora se ne dodjeljuje registracijom. Izbor profesora pravi zahtjev
+ *         na čekanju, dok profil ostaje uloga ucenik do ručnog odobrenja administratora.
  *       requestBody:
  *         required: true
  *         content:
@@ -230,10 +261,19 @@
  *                   format: password
  *                   minLength: 8
  *                   example: "SigurnaLozinka123"
+ *                 uloga:
+ *                   type: string
+ *                   enum: [ucenik, profesor]
+ *                   default: ucenik
+ *                   description: |
+ *                     Za profesor kreira samo zahtjev; stvarna uloga se uvijek postavlja
+ *                     na ucenik do odobrenja vlasnika projekta.
+ *                   example: profesor
  *             example:
  *               ime_i_prezime: Ana Anić
  *               email: ana@example.com
  *               lozinka: "SigurnaLozinka123"
+ *               uloga: profesor
  *       responses:
  *         "201":
  *           description: Nalog je kreiran.
@@ -246,21 +286,32 @@
  *                   ime_i_prezime: Ana Anić
  *                   uloga: ucenik
  *                   email: ana@example.com
+ *                 zahtev_za_profesora:
+ *                   id: 17
+ *                   status: na_cekanju
+ *                   kreiran_at: "2026-11-20T12:00:00Z"
+ *                   obradjen_at: null
  *                 token: eyJ...access-token
  *                 refresh_token: eyJ...refresh-token
  *                 potvrdaEmailaPotrebna: false
  *         "400":
- *           description: Neispravni podaci ili greška Supabase Auth-a.
+ *           description: Neispravni podaci ili nepoznata uloga.
  *           content:
  *             application/json:
  *               example:
- *                 greska: Unesite ispravnu email adresu.
+ *                 greska: Uloga mora biti ucenik ili profesor.
  *         "409":
  *           description: Nalog već postoji ili registracija nije moguća.
  *           content:
  *             application/json:
  *               example:
  *                 greska: Registracija nije moguća ili nalog već postoji.
+ *         "503":
+ *           description: Supabase Auth nije dostupan ili SQL za zahtjeve profesora nije primijenjen.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 greska: Supabase Auth trenutno nije dostupan.
  *         "500":
  *           description: Greška pri registraciji ili kreiranju profila.
  *           content:
@@ -360,6 +411,71 @@
  *             application/json:
  *               example:
  *                 greska: Korisnički profil ne postoji.
+ *   /api/auth/zahtev-za-profesora:
+ *     get:
+ *       tags: [Autentifikacija]
+ *       summary: Status zahtjeva za profesorski nalog
+ *       security:
+ *         - bearerAuth: []
+ *       responses:
+ *         "200":
+ *           description: Zahtjev korisnika ili null ako nije podnesen.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 zahtev_za_profesora:
+ *                   id: 17
+ *                   status: na_cekanju
+ *                   kreiran_at: "2026-11-20T12:00:00Z"
+ *                   obradjen_at: null
+ *         "401":
+ *           description: Potrebna je prijava.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 greska: Morate biti prijavljeni.
+ *         "503":
+ *           description: SQL migracija za zahtjeve još nije primijenjena.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 greska: Tabela zahtjeva nije spremna.
+ *     post:
+ *       tags: [Autentifikacija]
+ *       summary: Podnošenje ili oporavak zahtjeva za profesora
+ *       description: |
+ *         Koristi ID iz potvrđenog tokena; tijelo zahtjeva se ignoriše.
+ *         Profil ostaje uloga ucenik dok vlasnik projekta ne odobri zahtjev u SQL Editoru.
+ *       security:
+ *         - bearerAuth: []
+ *       responses:
+ *         "200":
+ *           description: Zahtjev postoji i čeka odobrenje.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 poruka: Zahtjev za profesorski nalog je na čekanju.
+ *                 zahtev_za_profesora:
+ *                   id: 17
+ *                   status: na_cekanju
+ *         "401":
+ *           description: Potrebna je prijava.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 greska: Morate biti prijavljeni.
+ *         "409":
+ *           description: Profil nije učenik ili je zahtjev već obrađen.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 greska: Zahtjev je već obrađen.
+ *         "503":
+ *           description: SQL migracija za zahtjeve još nije primijenjena.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 greska: Tabela zahtjeva nije spremna.
  *   /api/auth/osvezi-token:
  *     post:
  *       tags: [Autentifikacija]
@@ -426,6 +542,8 @@
  *                   termin: Srijeda 14:00
  *                   prostorija: Muzička učionica
  *                   aktivna: true
+ *                   broj_prijavljenih: 8
+ *                   slobodna_mesta: 12
  *     post:
  *       tags: [Aktivnosti]
  *       summary: Kreiranje aktivnosti
@@ -920,7 +1038,7 @@
  *     post:
  *       tags: [Prostorije]
  *       summary: Kreiranje prostorije
- *       description: Dostupno profesoru ili administratoru.
+ *       description: Dostupno profesoru.
  *       security:
  *         - bearerAuth: []
  *       requestBody:
@@ -970,7 +1088,7 @@
  *               example:
  *                 greska: Morate biti prijavljeni.
  *         "403":
- *           description: Potrebna je uloga profesora ili administratora.
+ *           description: Potrebna je uloga profesora.
  *           content:
  *             application/json:
  *               example:
@@ -991,7 +1109,7 @@
  *     patch:
  *       tags: [Prostorije]
  *       summary: Izmjena prostorije
- *       description: Dostupno profesoru ili administratoru.
+ *       description: Dostupno profesoru.
  *       security:
  *         - bearerAuth: []
  *       parameters:
@@ -1040,7 +1158,7 @@
  *               example:
  *                 greska: Morate biti prijavljeni.
  *         "403":
- *           description: Potrebna je uloga profesora ili administratora.
+ *           description: Potrebna je uloga profesora.
  *           content:
  *             application/json:
  *               example:

@@ -4,3 +4,9 @@
 node_modules/
 node_modules-task-backup-*/
 .env
+
+node_modules/
+.env
+.env.*
+!.env.example
+node_modules-task-backup-*/

@@ -6,8 +6,38 @@ const zahtevajPrijavu = require("../middleware/zahtevajPrijavu");
 const router = express.Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const DOZVOLJENE_ULOGE = ["ucenik", "profesor"];
 
-// REGISTRACIJA UCENIKA
+async function dohvatiZahtjevProfesora(korisnikId) {
+  const { data, error } = await dbSupabase
+    .from("zahtevi_za_profesora")
+    .select("id, status, kreiran_at, obradjen_at")
+    .eq("korisnik_id", korisnikId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+async function kreirajIliVratiZahtjevProfesora(korisnikId) {
+  const { data, error } = await dbSupabase
+    .from("zahtevi_za_profesora")
+    .upsert(
+      { korisnik_id: korisnikId },
+      { onConflict: "korisnik_id" }
+    )
+    .select("id, status, kreiran_at, obradjen_at")
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+function tabelaZahtjevaNedostaje(error) {
+  return error.code === "42P01" || error.code === "PGRST205";
+}
+
+// REGISTRACIJA NALOGA
 router.post("/registracija", async (req, res) => {
   try {
     const body = req.body || {};
@@ -25,6 +55,8 @@ router.post("/registracija", async (req, res) => {
         : "";
 
     const lozinka = body.lozinka;
+    const trazenaUloga =
+      body.uloga === undefined ? "ucenik" : body.uloga;
 
     if (ime_i_prezime.length < 2) {
       return res.status(400).json({
@@ -47,17 +79,49 @@ router.post("/registracija", async (req, res) => {
       });
     }
 
+    if (!DOZVOLJENE_ULOGE.includes(trazenaUloga)) {
+      return res.status(400).json({
+        greska: "Uloga mora biti ucenik ili profesor."
+      });
+    }
+
     const { data, error } = await authSupabase.auth.signUp({
       email,
       password: lozinka,
       options: {
-        data: { ime_i_prezime }
+        data: {
+          ime_i_prezime,
+          requested_role: trazenaUloga
+        }
       }
     });
 
     if (error) {
-      return res.status(400).json({
-        greska: error.message
+      const duplikat =
+        error.code === "user_already_exists" ||
+        /already (been )?(registered|exists)/i.test(error.message || "");
+      const problemSupabaseBaze =
+        error.code === "unexpected_failure" ||
+        /database error|internal server error/i.test(error.message || "");
+      const status = duplikat
+        ? 409
+        : !problemSupabaseBaze &&
+          (error.status === 400 || error.status === 422)
+          ? 400
+          : 503;
+
+      console.error("Supabase Auth registracija:", {
+        status: error.status,
+        code: error.code,
+        message: error.message
+      });
+
+      return res.status(status).json({
+        greska: duplikat
+          ? "Nalog sa ovom email adresom već postoji."
+          : status === 400
+            ? "Podaci za registraciju nisu prihvaćeni."
+            : "Supabase Auth trenutno nije dostupan."
       });
     }
 
@@ -67,38 +131,41 @@ router.post("/registracija", async (req, res) => {
       });
     }
 
-    const { data: postojeci, error: proveraGreska } =
+    const { data: profil, error: profilGreska } =
       await dbSupabase
         .from("korisnici")
+        .upsert({
+          id: data.user.id,
+          ime_i_prezime,
+          uloga: "ucenik"
+        }, { onConflict: "id" })
         .select("id, ime_i_prezime, uloga")
-        .eq("id", data.user.id)
-        .maybeSingle();
+        .single();
 
-    if (proveraGreska) throw proveraGreska;
+    if (profilGreska) {
+      console.error("Kreiranje profila:", profilGreska);
 
-    let profil = postojeci;
+      return res.status(500).json({
+        greska: "Nalog je kreiran, ali profil nije upisan."
+      });
+    }
 
-    if (!profil) {
-      const { data: noviProfil, error: profilGreska } =
-        await dbSupabase
-          .from("korisnici")
-          .insert({
-            id: data.user.id,
-            ime_i_prezime,
-            uloga: "ucenik"
-          })
-          .select("id, ime_i_prezime, uloga")
-          .single();
+    let zahtevZaProfesora = null;
 
-      if (profilGreska) {
-        console.error("Kreiranje profila:", profilGreska);
+    if (trazenaUloga === "profesor") {
+      try {
+        zahtevZaProfesora = await kreirajIliVratiZahtjevProfesora(
+          data.user.id
+        );
+      } catch (error) {
+        console.error("Evidentiranje zahtjeva za profesora:", error);
 
-        return res.status(500).json({
-          greska: "Nalog je kreiran, ali profil nije upisan."
+        return res.status(tabelaZahtjevaNedostaje(error) ? 503 : 500).json({
+          greska: tabelaZahtjevaNedostaje(error)
+            ? "Nalog je kreiran kao učenik. Ne registrujte se ponovo. Izvršite SQL za zahtjeve profesora, prijavite se postojećim nalogom i pozovite POST /api/auth/zahtev-za-profesora."
+            : "Nalog je kreiran kao učenik, ali zahtjev nije evidentiran."
         });
       }
-
-      profil = noviProfil;
     }
 
     return res.status(201).json({
@@ -107,6 +174,7 @@ router.post("/registracija", async (req, res) => {
         ...profil,
         email: data.user.email
       },
+      zahtev_za_profesora: zahtevZaProfesora,
       token: data.session?.access_token || null,
       refresh_token: data.session?.refresh_token || null,
       potvrdaEmailaPotrebna: !data.session
@@ -185,13 +253,64 @@ router.post("/prijava", async (req, res) => {
 });
 
 // TRENUTNI KORISNIK
-router.get("/me", zahtevajPrijavu, (req, res) => {
+router.get("/me", zahtevajPrijavu, async (req, res) => {
   return res.status(200).json({
     korisnik: {
       ...req.profil,
       email: req.korisnik.email
     }
   });
+});
+
+router.get(
+  "/zahtev-za-profesora",
+  zahtevajPrijavu,
+  async (req, res) => {
+    try {
+      const zahtev = await dohvatiZahtjevProfesora(req.korisnik.id);
+      return res.status(200).json({ zahtev_za_profesora: zahtev });
+    } catch (error) {
+      console.error("Učitavanje zahtjeva za profesora:", error);
+
+      return res.status(tabelaZahtjevaNedostaje(error) ? 503 : 500).json({
+        greska: tabelaZahtjevaNedostaje(error)
+          ? "Tabela zahtjeva nije spremna. Izvršite SQL migraciju za profesorske zahtjeve."
+          : "Greška pri učitavanju zahtjeva za profesora."
+      });
+    }
+  }
+);
+
+router.post("/zahtev-za-profesora", zahtevajPrijavu, async (req, res) => {
+  if (req.profil.uloga !== "ucenik") {
+    return res.status(409).json({
+      greska: "Zahtjev mogu podnijeti samo korisnici sa ulogom ucenik."
+    });
+  }
+
+  try {
+    const zahtev = await kreirajIliVratiZahtjevProfesora(req.korisnik.id);
+
+    if (zahtev.status !== "na_cekanju") {
+      return res.status(409).json({
+        greska: "Zahtjev je već obrađen.",
+        zahtev_za_profesora: zahtev
+      });
+    }
+
+    return res.status(200).json({
+      poruka: "Zahtjev za profesorski nalog je na čekanju.",
+      zahtev_za_profesora: zahtev
+    });
+  } catch (error) {
+    console.error("Evidentiranje zahtjeva za profesora:", error);
+
+    return res.status(tabelaZahtjevaNedostaje(error) ? 503 : 500).json({
+      greska: tabelaZahtjevaNedostaje(error)
+        ? "Tabela zahtjeva nije spremna. Izvršite SQL migraciju za profesorske zahtjeve."
+        : "Greška pri evidentiranju zahtjeva za profesora."
+    });
+  }
 });
 
 // OSVEZAVANJE TOKENA

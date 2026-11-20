@@ -6,7 +6,36 @@ async function pregledAktivnosti(supabase) {
     .order("kreirano_at", { ascending: false });
 
   if (error) throw error;
-  return data;
+
+  if (!data.length) return data;
+
+  const { data: prijave, error: prijaveError } = await supabase
+    .from("prijave")
+    .select("aktivnost_id")
+    .eq("status_prijave", "prijavljen")
+    .in("aktivnost_id", data.map(aktivnost => aktivnost.id));
+
+  if (prijaveError) throw prijaveError;
+
+  const brojPoAktivnosti = new Map();
+  for (const prijava of prijave) {
+    brojPoAktivnosti.set(
+      prijava.aktivnost_id,
+      (brojPoAktivnosti.get(prijava.aktivnost_id) || 0) + 1
+    );
+  }
+
+  return data.map(aktivnost => {
+    const brojPrijavljenih = brojPoAktivnosti.get(aktivnost.id) || 0;
+    return {
+      ...aktivnost,
+      broj_prijavljenih: brojPrijavljenih,
+      slobodna_mesta: Math.max(
+        0,
+        aktivnost.maksimalno_mesta - brojPrijavljenih
+      )
+    };
+  });
 }
 
 async function aktivnostPoId(supabase, aktivnostId) {

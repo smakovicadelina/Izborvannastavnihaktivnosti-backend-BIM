@@ -6,6 +6,18 @@ const zahtevajUlogu = require("../middleware/zahtevajUlogu");
 
 const router = express.Router();
 
+function ispravnoVreme(value) {
+  return (
+    typeof value === "string" &&
+    /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(value)
+  );
+}
+
+function sekundeOdPonoci(vreme) {
+  const [sati, minuti, sekunde = "0"] = vreme.split(":");
+  return Number(sati) * 3600 + Number(minuti) * 60 + Number(sekunde);
+}
+
 router.use(zahtevajPrijavu);
 
 // PREGLED TERMINA
@@ -42,17 +54,13 @@ router.post(
         prostorija_id
       } = req.body || {};
 
-      const ispravnoVreme = value =>
-        typeof value === "string" &&
-        /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(value);
-
       if (
         !Number.isInteger(dan_u_nedelji) ||
         dan_u_nedelji < 1 ||
         dan_u_nedelji > 7 ||
         !ispravnoVreme(vreme_od) ||
         !ispravnoVreme(vreme_do) ||
-        vreme_od >= vreme_do ||
+        sekundeOdPonoci(vreme_od) >= sekundeOdPonoci(vreme_do) ||
         !Number.isSafeInteger(prostorija_id) ||
         prostorija_id < 1
       ) {
@@ -136,17 +144,13 @@ router.patch(
 
       const novi = { ...postojeci, ...unos };
 
-      const ispravnoVreme = value =>
-        typeof value === "string" &&
-        /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(value);
-
       if (
         !Number.isInteger(novi.dan_u_nedelji) ||
         novi.dan_u_nedelji < 1 ||
         novi.dan_u_nedelji > 7 ||
         !ispravnoVreme(novi.vreme_od) ||
         !ispravnoVreme(novi.vreme_do) ||
-        novi.vreme_od >= novi.vreme_do ||
+        sekundeOdPonoci(novi.vreme_od) >= sekundeOdPonoci(novi.vreme_do) ||
         !Number.isSafeInteger(novi.prostorija_id) ||
         novi.prostorija_id < 1
       ) {

@@ -28,7 +28,7 @@ router.get("/", async (req, res) => {
 
 router.post(
   "/",
-  zahtevajUlogu("profesor", "administrator"),
+  zahtevajUlogu("profesor"),
   async (req, res) => {
     try {
       const { naziv, kapacitet, opis = null } = req.body || {};
@@ -76,7 +76,7 @@ router.post(
 
 router.patch(
   "/:id",
-  zahtevajUlogu("profesor", "administrator"),
+  zahtevajUlogu("profesor"),
   async (req, res) => {
     try {
       const id = Number(req.params.id);
