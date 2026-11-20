@@ -3,28 +3,55 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
+const path = require("path");
+const swaggerJsdoc = require("swagger-jsdoc");
+const swaggerUi = require("swagger-ui-express");
 
 const authRoutes = require("./routes/authRoutes");
 const aktivnostRoutes = require("./routes/aktivnostRoutes");
 const mojePrijaveRoutes = require("./routes/mojePrijaveRoutes");
 const prostorijaRoutes = require("./routes/prostorijaRoutes");
-
+const terminRoutes = require("./routes/terminRoutes");
 const app = express();
+const port = Number(process.env.PORT) || 3000;
+
+const swaggerSpec = swaggerJsdoc({
+  definition: {
+    openapi: "3.0.3",
+    info: {
+      title: "API za vannastavne aktivnosti",
+      version: "1.2.0"
+    }
+  },
+  apis: [
+    path.join(__dirname, "openapi.js"),
+    path.join(__dirname, "routes", "*.js"),
+  ],
+});
 
 app.disable("x-powered-by");
 
-const dozvoljeniOrigin = (
-  process.env.CORS_ORIGIN ||
-  process.env.FRONTEND_ORIGIN ||
-  "http://localhost:5173"
-)
-  .split(",")
-  .map(origin => origin.trim())
-  .filter(Boolean);
+const dozvoljeniOrigin = [
+  ...(
+    process.env.CORS_ORIGIN ||
+    process.env.FRONTEND_ORIGIN ||
+    "http://localhost:5173"
+  )
+    .split(",")
+    .map(origin => origin.trim())
+    .filter(Boolean),
+  `http://localhost:${port}`,
+  `http://127.0.0.1:${port}`
+];
 
 app.use(
   cors({
     origin(origin, callback) {
+      console.log("CORS PROVJERA:", {
+  origin,
+  dozvoljeniOrigin,
+  port
+});
       if (!origin || dozvoljeniOrigin.includes(origin)) {
         return callback(null, true);
       }
@@ -47,7 +74,9 @@ app.use(
 );
 
 app.use(express.json({ limit: "1mb" }));
-
+app.get("/api/test-verzija", (req, res) => {
+  res.json({ verzija: "NOVA_VERZIJA_37" });
+});
 app.get("/api/health", (req, res) => {
   return res.status(200).json({
     status: "ok",
@@ -62,11 +91,27 @@ app.get("/", (req, res) => {
   });
 });
 
+app.get("/api-docs.json", (req, res) => {
+  res.json(swaggerSpec);
+});
+
+app.use(
+  "/api-docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    explorer: true,
+    swaggerOptions: {
+      persistAuthorization: false
+    }
+  })
+);
+
 // API RUTE
 app.use("/api/auth", authRoutes);
 app.use("/api/aktivnosti", aktivnostRoutes);
 app.use("/api/moje-prijave", mojePrijaveRoutes);
 app.use("/api/prostorije", prostorijaRoutes);
+app.use("/api/termini", terminRoutes);
 
 app.use((req, res) => {
   return res.status(404).json({
@@ -130,8 +175,6 @@ app.use((err, req, res, next) => {
     greska: "Došlo je do greške na serveru."
   });
 });
-
-const port = Number(process.env.PORT) || 3000;
 
 if (require.main === module) {
   app.listen(port, () => {
