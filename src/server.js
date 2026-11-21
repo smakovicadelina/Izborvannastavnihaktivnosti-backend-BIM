@@ -12,6 +12,14 @@ const aktivnostRoutes = require("./routes/aktivnostRoutes");
 const mojePrijaveRoutes = require("./routes/mojePrijaveRoutes");
 const prostorijaRoutes = require("./routes/prostorijaRoutes");
 const terminRoutes = require("./routes/terminRoutes");
+const kategorijaRoutes = require("./routes/kategorijaRoutes");
+const interesovanjeRoutes = require("./routes/interesovanjeRoutes");
+const profilRoutes = require("./routes/profilRoutes");
+const obavestenjaRoutes = require("./routes/obavestenjaRoutes");
+const prisustvoRoutes = require("./routes/prisustvoRoutes");
+const aiRoutes = require("./routes/aiRoutes");
+const adminRoutes = require("./routes/adminRoutes");
+const { HttpGreska, tabelaNedostaje } = require("./utils/http");
 const app = express();
 const port = Number(process.env.PORT) || 3000;
 
@@ -22,7 +30,7 @@ const swaggerSpec = swaggerJsdoc({
       title: "API za vannastavne aktivnosti",
       version: "1.2.0",
       description:
-        "REST API za aktivnosti, prijave, termine i prostorije. Za zaštićene rute unesite Supabase access token kroz dugme Authorize."
+        "REST API za vannastavne aktivnosti: aktivnosti, kategorije, interesovanja, prijave, raspored, obaveštenja, QR prisustvo, AI preporuke i administratorski panel. Za zaštićene rute unesite Supabase access token kroz dugme Authorize."
     },
     servers: [
       {
@@ -33,7 +41,7 @@ const swaggerSpec = swaggerJsdoc({
   },
   apis: [
     path.join(__dirname, "openapi.js"),
-    path.join(__dirname, "routes", "*.js"),
+    path.join(__dirname, "openapi-prosirenje.js")
   ],
 });
 
@@ -63,10 +71,37 @@ const dozvoljeniOrigin = new Set([
   .map(origin => normalizujOrigin(origin.trim()))
   .filter(Boolean));
 
+const sviOrigini = konfigurisaniOrigini.some(o => o.trim() === "*");
+const produkcija = process.env.NODE_ENV === "production";
+
+// U razvoju dozvoljavamo localhost i lokalnu mrezu na bilo kom portu
+// (Vite, Expo web, emulator, telefon u istoj mrezi...).
+function lokalniOrigin(origin) {
+  try {
+    const { hostname, protocol } = new URL(origin);
+    if (!["http:", "https:"].includes(protocol)) return false;
+    return (
+      hostname === "localhost" ||
+      hostname === "[::1]" ||
+      /^127\./.test(hostname) ||
+      /^10\./.test(hostname) ||
+      /^192\.168\./.test(hostname) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || dozvoljeniOrigin.has(normalizujOrigin(origin))) {
+      if (
+        !origin ||
+        sviOrigini ||
+        dozvoljeniOrigin.has(normalizujOrigin(origin)) ||
+        (!produkcija && lokalniOrigin(origin))
+      ) {
         return callback(null, true);
       }
 
@@ -126,14 +161,49 @@ app.use("/api/aktivnosti", aktivnostRoutes);
 app.use("/api/moje-prijave", mojePrijaveRoutes);
 app.use("/api/prostorije", prostorijaRoutes);
 app.use("/api/termini", terminRoutes);
+app.use("/api/kategorije", kategorijaRoutes);
+app.use("/api/interesovanja", interesovanjeRoutes);
+app.use("/api/profil", profilRoutes);
+app.use("/api/obavestenja", obavestenjaRoutes);
+app.use("/api/prisustva", prisustvoRoutes);
+app.use("/api/ai", aiRoutes);
+app.use("/api/admin", adminRoutes);
 
 app.use((req, res) => {
   return res.status(404).json({
-    greska: "Ruta nije pronađena."
+    greska: "Ruta nije pronađena.",
+    metoda: req.method,
+    putanja: req.path
   });
 });
 
 app.use((err, req, res, next) => {
+  if (err instanceof HttpGreska) {
+    return res.status(err.status).json({
+      greska: err.message,
+      ...(err.dodatno || {})
+    });
+  }
+
+  if (tabelaNedostaje(err)) {
+    console.error("Nedostaje tabela u bazi:", err.message);
+    return res.status(503).json({
+      greska: "Baza nije ažurirana. Pokrenite SQL migracije iz foldera supabase/migrations."
+    });
+  }
+
+  if (["22P02", "22003", "22007", "22008", "PGRST100"].includes(err.code)) {
+    return res.status(400).json({
+      greska: "Neispravan format podataka."
+    });
+  }
+
+  if (err.code === "23P01") {
+    return res.status(409).json({
+      greska: "Termin se preklapa sa postojećim terminom u istoj prostoriji."
+    });
+  }
+
   if (
     err instanceof SyntaxError &&
     err.status === 400 &&

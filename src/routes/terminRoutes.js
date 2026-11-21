@@ -3,243 +3,216 @@ const express = require("express");
 const { dbSupabase } = require("../config/supabase");
 const zahtevajPrijavu = require("../middleware/zahtevajPrijavu");
 const zahtevajUlogu = require("../middleware/zahtevajUlogu");
+const {
+  upit,
+  zahtevajAktivnost,
+  terminiAktivnosti
+} = require("../services/aktivnostService");
+const {
+  zahtevajProstoriju,
+  proveriDostupnostProstorije,
+  aktivnostiTermina
+} = require("../services/terminService");
+const { obavestiUcenikeAktivnosti } = require("../services/obavestenjaService");
+const { greska, imaPolje, zahtevajId, parsirajId } = require("../utils/http");
+const {
+  ispravnoVreme,
+  sekundeOdPonoci,
+  nazivDana,
+  opisTermina,
+  sortirajTermine
+} = require("../utils/vreme");
 
 const router = express.Router();
+const profesor = zahtevajUlogu("profesor");
 
-function ispravnoVreme(value) {
+function validanTermin(t) {
   return (
-    typeof value === "string" &&
-    /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(value)
+    Number.isInteger(t.dan_u_nedelji) &&
+    t.dan_u_nedelji >= 1 &&
+    t.dan_u_nedelji <= 7 &&
+    ispravnoVreme(t.vreme_od) &&
+    ispravnoVreme(t.vreme_do) &&
+    sekundeOdPonoci(t.vreme_od) < sekundeOdPonoci(t.vreme_do) &&
+    Number.isSafeInteger(t.prostorija_id) &&
+    t.prostorija_id > 0
   );
 }
 
-function sekundeOdPonoci(vreme) {
-  const [sati, minuti, sekunde = "0"] = vreme.split(":");
-  return Number(sati) * 3600 + Number(minuti) * 60 + Number(sekunde);
+async function terminSaProstorijom(id) {
+  const { data, error } = await dbSupabase
+    .from("termini")
+    .select("id, dan_u_nedelji, vreme_od, vreme_do, prostorija_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
 }
 
 router.use(zahtevajPrijavu);
 
-// PREGLED TERMINA
-router.get("/", async (req, res, next) => {
-  try {
-    const { data, error } = await dbSupabase
-      .from("termini")
-      .select(
-        "id, dan_u_nedelji, vreme_od, vreme_do, prostorija_id"
-      )
-      .order("dan_u_nedelji")
-      .order("vreme_od");
+// PREGLED TERMINA (opciono ?prostorija_id=&dan=)
+router.get("/", async (req, res) => {
+  let q = dbSupabase
+    .from("termini")
+    .select("id, dan_u_nedelji, vreme_od, vreme_do, prostorija_id")
+    .order("dan_u_nedelji")
+    .order("vreme_od");
 
-    if (error) throw error;
-
-    return res.status(200).json({
-      termini: data || []
-    });
-  } catch (error) {
-    next(error);
+  if (req.query.prostorija_id !== undefined) {
+    q = q.eq("prostorija_id", zahtevajId(req.query.prostorija_id, "Neispravan ID prostorije."));
   }
+  if (req.query.dan !== undefined) {
+    const dan = parsirajId(req.query.dan);
+    if (!dan || dan > 7) throw greska(400, "Dan mora biti broj od 1 do 7.");
+    q = q.eq("dan_u_nedelji", dan);
+  }
+
+  const termini = await upit(q);
+  const prostorijaIds = [...new Set(termini.map(t => t.prostorija_id))];
+  const prostorije = prostorijaIds.length
+    ? await upit(dbSupabase.from("prostorije").select("id, naziv, kapacitet").in("id", prostorijaIds))
+    : [];
+  const poId = new Map(prostorije.map(p => [p.id, p]));
+
+  return res.status(200).json({
+    termini: termini.map(t => ({
+      ...t,
+      dan: nazivDana(t.dan_u_nedelji),
+      prostorija: poId.get(t.prostorija_id) || null
+    }))
+  });
 });
 
-// KREIRANJE TERMINA
-router.post(
-  "/",
-  zahtevajUlogu("profesor"),
-  async (req, res, next) => {
-    try {
-      const {
-        dan_u_nedelji,
-        vreme_od,
-        vreme_do,
-        prostorija_id
-      } = req.body || {};
+router.get("/:id", async (req, res) => {
+  const id = zahtevajId(req.params.id, "Neispravan ID termina.");
+  const termin = await terminSaProstorijom(id);
+  if (!termin) throw greska(404, "Termin nije pronađen.");
 
-      if (
-        !Number.isInteger(dan_u_nedelji) ||
-        dan_u_nedelji < 1 ||
-        dan_u_nedelji > 7 ||
-        !ispravnoVreme(vreme_od) ||
-        !ispravnoVreme(vreme_do) ||
-        sekundeOdPonoci(vreme_od) >= sekundeOdPonoci(vreme_do) ||
-        !Number.isSafeInteger(prostorija_id) ||
-        prostorija_id < 1
-      ) {
-        return res.status(400).json({
-          greska: "Neispravni podaci o terminu."
-        });
-      }
+  const aktivnosti = await aktivnostiTermina(dbSupabase, [id]);
+  return res.json({
+    termin: { ...termin, dan: nazivDana(termin.dan_u_nedelji), aktivnosti }
+  });
+});
 
-      const { data, error } = await dbSupabase
-        .from("termini")
-        .insert({
-          dan_u_nedelji,
-          vreme_od,
-          vreme_do,
-          prostorija_id
-        })
-        .select()
-        .single();
+// KREIRANJE TERMINA (provera dostupnosti prostorije)
+router.post("/", profesor, async (req, res) => {
+  const { dan_u_nedelji, vreme_od, vreme_do, prostorija_id } = req.body || {};
+  const novi = { dan_u_nedelji, vreme_od, vreme_do, prostorija_id };
 
-      if (error) throw error;
-
-      return res.status(201).json({
-        poruka: "Termin je uspesno kreiran.",
-        termin: data
-      });
-    } catch (error) {
-      next(error);
-    }
+  if (!validanTermin(novi)) {
+    throw greska(400, "Neispravni podaci o terminu.");
   }
-);
+
+  await zahtevajProstoriju(dbSupabase, prostorija_id);
+  await proveriDostupnostProstorije(dbSupabase, novi);
+
+  const { data, error } = await dbSupabase
+    .from("termini")
+    .insert(novi)
+    .select()
+    .single();
+  if (error) throw error;
+
+  return res.status(201).json({
+    poruka: "Termin je uspešno kreiran.",
+    termin: data
+  });
+});
 
 // IZMENA TERMINA
-router.patch(
-  "/:id",
-  zahtevajUlogu("profesor"),
-  async (req, res, next) => {
-    try {
-      const id = Number(req.params.id);
+router.patch("/:id", profesor, async (req, res) => {
+  const id = zahtevajId(req.params.id, "Neispravan ID termina.");
+  const unos = {};
 
-      if (!Number.isSafeInteger(id) || id < 1) {
-        return res.status(400).json({
-          greska: "Neispravan ID termina."
-        });
-      }
+  for (const polje of ["dan_u_nedelji", "vreme_od", "vreme_do", "prostorija_id"]) {
+    if (imaPolje(req.body, polje)) unos[polje] = req.body[polje];
+  }
 
-      const dozvoljenaPolja = [
-        "dan_u_nedelji",
-        "vreme_od",
-        "vreme_do",
-        "prostorija_id"
-      ];
+  if (!Object.keys(unos).length) {
+    throw greska(400, "Nema podataka za izmenu.");
+  }
 
-      const unos = {};
+  const postojeci = await terminSaProstorijom(id);
+  if (!postojeci) throw greska(404, "Termin nije pronađen.");
 
-      for (const polje of dozvoljenaPolja) {
-        if (Object.hasOwn(req.body || {}, polje)) {
-          unos[polje] = req.body[polje];
-        }
-      }
+  const novi = { ...postojeci, ...unos };
+  if (!validanTermin(novi)) {
+    throw greska(400, "Neispravni podaci za izmenu.");
+  }
 
-      if (Object.keys(unos).length === 0) {
-        return res.status(400).json({
-          greska: "Nema podataka za izmenu."
-        });
-      }
+  const aktivnosti = await aktivnostiTermina(dbSupabase, [id]);
 
-      const { data: postojeci, error: greskaCitanja } =
-        await dbSupabase
-          .from("termini")
-          .select("dan_u_nedelji, vreme_od, vreme_do, prostorija_id")
-          .eq("id", id)
-          .maybeSingle();
-
-      if (greskaCitanja) throw greskaCitanja;
-
-      if (!postojeci) {
-        return res.status(404).json({
-          greska: "Termin nije pronadjen."
-        });
-      }
-
-      const novi = { ...postojeci, ...unos };
-
-      if (
-        !Number.isInteger(novi.dan_u_nedelji) ||
-        novi.dan_u_nedelji < 1 ||
-        novi.dan_u_nedelji > 7 ||
-        !ispravnoVreme(novi.vreme_od) ||
-        !ispravnoVreme(novi.vreme_do) ||
-        sekundeOdPonoci(novi.vreme_od) >= sekundeOdPonoci(novi.vreme_do) ||
-        !Number.isSafeInteger(novi.prostorija_id) ||
-        novi.prostorija_id < 1
-      ) {
-        return res.status(400).json({
-          greska: "Neispravni podaci za izmenu."
-        });
-      }
-
-      const { data, error } = await dbSupabase
-        .from("termini")
-        .update(unos)
-        .eq("id", id)
-        .select()
-        .maybeSingle();
-
-      if (error) throw error;
-
-      return res.status(200).json({
-        poruka: "Termin je izmenjen.",
-        termin: data
-      });
-    } catch (error) {
-      next(error);
+  if (unos.prostorija_id && unos.prostorija_id !== postojeci.prostorija_id) {
+    const prostorija = await zahtevajProstoriju(dbSupabase, unos.prostorija_id);
+    const prevelika = aktivnosti.find(a => a.aktivna && a.maksimalno_mesta > prostorija.kapacitet);
+    if (prevelika) {
+      throw greska(
+        409,
+        `Prostorija ${prostorija.naziv} (kapacitet ${prostorija.kapacitet}) je premala za aktivnost "${prevelika.naziv}" (${prevelika.maksimalno_mesta} mesta).`
+      );
     }
   }
-);
 
-// BRISANJE TERMINA
-router.delete(
-  "/:id",
-  zahtevajUlogu("profesor"),
-  async (req, res, next) => {
-    try {
-      const id = Number(req.params.id);
+  await proveriDostupnostProstorije(dbSupabase, novi, id);
 
-      if (!Number.isSafeInteger(id) || id < 1) {
-        return res.status(400).json({
-          greska: "Neispravan ID termina."
-        });
-      }
+  const { data, error } = await dbSupabase
+    .from("termini")
+    .update(unos)
+    .eq("id", id)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
 
-      // Ne dozvoljavamo brisanje termina
-      // koji je povezan sa aktivnostima.
-      const { data: veze, error: greskaVeza } =
-        await dbSupabase
-          .from("aktivnost_termini")
-          .select("aktivnost_id")
-          .eq("termin_id", id)
-          .limit(1);
-
-      if (greskaVeza) throw greskaVeza;
-
-      const { data: direktne, error: greskaDirektnih } =
-        await dbSupabase
-          .from("aktivnosti")
-          .select("id")
-          .eq("termin_id", id)
-          .limit(1);
-
-      if (greskaDirektnih) throw greskaDirektnih;
-
-      if (veze.length || direktne.length) {
-        return res.status(409).json({
-          greska: "Termin je povezan sa aktivnoscu."
-        });
-      }
-
-      const { data, error } = await dbSupabase
-        .from("termini")
-        .delete()
-        .eq("id", id)
-        .select("id")
-        .maybeSingle();
-
-      if (error) throw error;
-
-      if (!data) {
-        return res.status(404).json({
-          greska: "Termin nije pronadjen."
-        });
-      }
-
-      return res.status(200).json({
-        poruka: "Termin je obrisan."
-      });
-    } catch (error) {
-      next(error);
-    }
+  // Osvezavamo tekstualni opis termina/prostorije u povezanim aktivnostima.
+  for (const a of aktivnosti) {
+    const puna = await zahtevajAktivnost(dbSupabase, a.id);
+    const termini = sortirajTermine(await terminiAktivnosti(dbSupabase, puna));
+    if (!termini.length) continue;
+    const { error: tekstGreska } = await dbSupabase
+      .from("aktivnosti")
+      .update({
+        termin: termini.map(opisTermina).join("; "),
+        prostorija: [...new Set(termini.map(t => t.prostorija?.naziv).filter(Boolean))].join(", ") || null
+      })
+      .eq("id", a.id);
+    if (tekstGreska) throw tekstGreska;
   }
-);
+
+  // Obavestavamo ucenike svih aktivnosti koje koriste ovaj termin.
+  for (const a of aktivnosti.filter(x => x.aktivna)) {
+    await obavestiUcenikeAktivnosti(dbSupabase, a.id, {
+      tip: "promena_termina",
+      naslov: "Promena termina",
+      poruka: `Termin aktivnosti "${a.naziv}" je promenjen: ${opisTermina(data)}.`
+    });
+  }
+
+  return res.status(200).json({
+    poruka: "Termin je izmenjen.",
+    termin: data
+  });
+});
+
+// BRISANJE TERMINA (nije dozvoljeno ako je povezan sa aktivnoscu)
+router.delete("/:id", profesor, async (req, res) => {
+  const id = zahtevajId(req.params.id, "Neispravan ID termina.");
+
+  const aktivnosti = await aktivnostiTermina(dbSupabase, [id]);
+  if (aktivnosti.length) {
+    throw greska(409, `Termin je povezan sa aktivnošću "${aktivnosti[0].naziv}".`);
+  }
+
+  const { data, error } = await dbSupabase
+    .from("termini")
+    .delete()
+    .eq("id", id)
+    .select("id")
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw greska(404, "Termin nije pronađen.");
+
+  return res.status(200).json({ poruka: "Termin je obrisan." });
+});
 
 module.exports = router;

@@ -3,74 +3,46 @@ const express = require("express");
 
 const kontroler = require("../controllers/aktivnostController");
 const zahtevajPrijavu = require("../middleware/zahtevajPrijavu");
+const { opcionaPrijava } = require("../middleware/zahtevajPrijavu");
 const zahtevajUlogu = require("../middleware/zahtevajUlogu");
 
 const router = express.Router();
+const profesor = [zahtevajPrijavu, zahtevajUlogu("profesor")];
+const ucenik = [zahtevajPrijavu, zahtevajUlogu("ucenik")];
 
-// PREGLED SVIH AKTIVNOSTI
-router.get("/", kontroler.pregled);
+// PREGLED, PRETRAGA I FILTRIRANJE AKTIVNOSTI (javno; token je opcion)
+router.get("/", opcionaPrijava, kontroler.pregled);
 
-// SLOBODNA MESTA
-router.get(
-  "/:aktivnostId/mesta",
-  zahtevajPrijavu,
-  kontroler.mesta
-);
+// DETALJI AKTIVNOSTI
+router.get("/:aktivnostId", opcionaPrijava, kontroler.detalji);
+
+// SLOBODNA MESTA (zadrzano zbog kompatibilnosti sa frontendom)
+router.get("/:aktivnostId/mesta", zahtevajPrijavu, kontroler.mesta);
 
 // PROFESOR - KREIRANJE AKTIVNOSTI
-router.post(
-  "/",
-  zahtevajPrijavu,
-  zahtevajUlogu("profesor"),
-  kontroler.kreiranje
-);
+router.post("/", ...profesor, kontroler.kreiranje);
 
 // PROFESOR - UREDJIVANJE
-router.patch(
-  "/:aktivnostId",
-  zahtevajPrijavu,
-  zahtevajUlogu("profesor"),
-  kontroler.uredivanje
-);
+router.patch("/:aktivnostId", ...profesor, kontroler.uredivanje);
 
-// PROFESOR - DEAKTIVACIJA
-router.patch(
-  "/:aktivnostId/deaktiviraj",
-  zahtevajPrijavu,
-  zahtevajUlogu("profesor"),
-  kontroler.deaktiviranje
-);
+// PROFESOR - BRISANJE (samo aktivnost bez prijava)
+router.delete("/:aktivnostId", ...profesor, kontroler.brisanje);
 
-// PROFESOR - PREGLED PRIJAVA
-router.get(
-  "/:aktivnostId/prijave",
-  zahtevajPrijavu,
-  zahtevajUlogu("profesor"),
-  kontroler.prijaveAktivnosti
-);
+// PROFESOR - DEAKTIVACIJA / AKTIVACIJA
+router.patch("/:aktivnostId/deaktiviraj", ...profesor, kontroler.deaktiviranje);
+router.patch("/:aktivnostId/aktiviraj", ...profesor, kontroler.aktiviranje);
 
-// PROFESOR - PROMENA STATUSA PRIJAVE
-router.patch(
-  "/:aktivnostId/prijave/:prijavaId",
-  zahtevajPrijavu,
-  zahtevajUlogu("profesor"),
-  kontroler.azurirajPrijavu
-);
+// PROFESOR - QR KOD ZA PRISUSTVO
+router.get("/:aktivnostId/qr", ...profesor, kontroler.qrKod);
 
-// UCENIK - PRIJAVA NA AKTIVNOST
-router.post(
-  "/:aktivnostId/prijava",
-  zahtevajPrijavu,
-  zahtevajUlogu("ucenik"),
-  kontroler.prijava
-);
+// PROFESOR - UPRAVLJANJE PRIJAVAMA
+router.get("/:aktivnostId/prijave", ...profesor, kontroler.prijaveAktivnosti);
+router.post("/:aktivnostId/prijave", ...profesor, kontroler.upisUcenika);
+router.patch("/:aktivnostId/prijave/:prijavaId", ...profesor, kontroler.azurirajPrijavu);
+router.delete("/:aktivnostId/prijave/:prijavaId", ...profesor, kontroler.brisanjePrijave);
 
-// UCENIK - OTKAZIVANJE PRIJAVE
-router.delete(
-  "/:aktivnostId/prijava",
-  zahtevajPrijavu,
-  zahtevajUlogu("ucenik"),
-  kontroler.otkazivanje
-);
+// UCENIK - PRIJAVA I OTKAZIVANJE
+router.post("/:aktivnostId/prijava", ...ucenik, kontroler.prijava);
+router.delete("/:aktivnostId/prijava", ...ucenik, kontroler.otkazivanje);
 
 module.exports = router;

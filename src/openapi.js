@@ -85,6 +85,45 @@
  *         aktivna:
  *           type: boolean
  *           example: true
+ *         kategorija:
+ *           type: object
+ *           nullable: true
+ *           properties:
+ *             id: { type: integer, example: 5 }
+ *             naziv: { type: string, example: Muzika }
+ *         termini:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               id: { type: integer, example: 5 }
+ *               dan_u_nedelji: { type: integer, example: 3 }
+ *               dan: { type: string, example: Sreda }
+ *               vreme_od: { type: string, example: "14:00:00" }
+ *               vreme_do: { type: string, example: "15:30:00" }
+ *               prostorija:
+ *                 $ref: "#/components/schemas/Prostorija"
+ *         profesori:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               id: { type: string, format: uuid }
+ *               ime_i_prezime: { type: string, example: Marko Marković }
+ *         interesovanja:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               id: { type: integer, example: 3 }
+ *               naziv: { type: string, example: Muzika }
+ *         moja_prijava:
+ *           type: object
+ *           nullable: true
+ *           description: Samo uz token učenika.
+ *           properties:
+ *             id: { type: integer }
+ *             status_prijave: { type: string, enum: [prijavljen, na_cekanju] }
  *         broj_prijavljenih:
  *           type: integer
  *           example: 8
@@ -524,7 +563,40 @@
  *   /api/aktivnosti:
  *     get:
  *       tags: [Aktivnosti]
- *       summary: Pregled svih aktivnosti
+ *       summary: Pregled, pretraga i filtriranje aktivnosti
+ *       description: |
+ *         Javna ruta (token je opcion). Učenik i anonimni korisnik vide samo aktivne aktivnosti.
+ *         Uz token učenika svaka aktivnost sadrži i `moja_prijava`.
+ *       security:
+ *         - {}
+ *         - bearerAuth: []
+ *       parameters:
+ *         - name: q
+ *           in: query
+ *           description: Pretraga po nazivu, opisu, kategoriji, interesovanjima i profesorima.
+ *           schema: { type: string }
+ *         - name: kategorija_id
+ *           in: query
+ *           schema: { type: integer }
+ *         - name: interesovanje_id
+ *           in: query
+ *           description: Jedan ili više ID-jeva odvojenih zarezom.
+ *           schema: { type: string, example: "1,2" }
+ *         - name: moja_interesovanja
+ *           in: query
+ *           description: Filtrira po interesovanjima iz profila prijavljenog korisnika.
+ *           schema: { type: boolean }
+ *         - name: dan
+ *           in: query
+ *           description: Dan u nedelji (1 = ponedeljak ... 7 = nedelja).
+ *           schema: { type: integer, minimum: 1, maximum: 7 }
+ *         - name: samo_slobodna
+ *           in: query
+ *           schema: { type: boolean }
+ *         - name: ukljuci_neaktivne
+ *           in: query
+ *           description: Samo za profesora.
+ *           schema: { type: boolean }
  *       responses:
  *         "200":
  *           description: Lista aktivnosti.
@@ -547,7 +619,10 @@
  *     post:
  *       tags: [Aktivnosti]
  *       summary: Kreiranje aktivnosti
- *       description: Dostupno profesoru.
+ *       description: |
+ *         Dostupno profesoru. Termin se zadaje ili kao tekst (`termin`, `prostorija`) ili kao
+ *         lista postojećih termina (`termini_ids`). Sistem proverava da je prostorija u tim
+ *         terminima slobodna i da broj mesta ne premašuje kapacitet prostorije.
  *       security:
  *         - bearerAuth: []
  *       requestBody:
@@ -556,8 +631,27 @@
  *           application/json:
  *             schema:
  *               type: object
- *               required: [naziv, maksimalno_mesta, termin, prostorija]
+ *               required: [naziv, maksimalno_mesta]
  *               properties:
+ *                 kategorija_id:
+ *                   type: integer
+ *                   nullable: true
+ *                   example: 5
+ *                 slika_url:
+ *                   type: string
+ *                   nullable: true
+ *                 termini_ids:
+ *                   type: array
+ *                   items: { type: integer }
+ *                   example: [5]
+ *                 profesori_ids:
+ *                   type: array
+ *                   items: { type: string, format: uuid }
+ *                 interesovanja_ids:
+ *                   type: array
+ *                   description: Zahteva SQL migraciju 004.
+ *                   items: { type: integer }
+ *                   example: [3]
  *                 naziv:
  *                   type: string
  *                   example: Školski hor
@@ -611,12 +705,18 @@
  *             application/json:
  *               example:
  *                 greska: Nemate dozvolu za ovu radnju.
+ *         "409":
+ *           description: Prostorija je zauzeta ili je kapacitet prostorije premali.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 greska: Broj mesta (30) premašuje kapacitet prostorije Učionica 4 (24).
  *         "500":
  *           description: Greška pri radu sa bazom.
  *           content:
  *             application/json:
  *               example:
- *                 greska: Greška prilikom rada sa bazom.
+ *                 greska: Došlo je do greške na serveru.
  *   /api/aktivnosti/{aktivnostId}/mesta:
  *     get:
  *       tags: [Aktivnosti]
@@ -659,7 +759,7 @@
  *     patch:
  *       tags: [Aktivnosti]
  *       summary: Izmjena aktivnosti
- *       description: Dostupno profesoru koji je kreirao aktivnost.
+ *       description: Dostupno profesoru (administratoru).
  *       security:
  *         - bearerAuth: []
  *       parameters:
@@ -737,7 +837,7 @@
  *     patch:
  *       tags: [Aktivnosti]
  *       summary: Deaktivacija aktivnosti
- *       description: Dostupno profesoru koji je kreirao aktivnost.
+ *       description: Dostupno profesoru (administratoru).
  *       security:
  *         - bearerAuth: []
  *       parameters:
@@ -780,7 +880,7 @@
  *     get:
  *       tags: [Prijave]
  *       summary: Pregled prijava za aktivnost
- *       description: Dostupno profesoru koji je kreirao aktivnost.
+ *       description: Dostupno profesoru (administratoru).
  *       security:
  *         - bearerAuth: []
  *       parameters:
@@ -823,7 +923,7 @@
  *     patch:
  *       tags: [Prijave]
  *       summary: Promjena statusa prijave
- *       description: Dostupno profesoru koji je kreirao aktivnost.
+ *       description: Dostupno profesoru (administratoru).
  *       security:
  *         - bearerAuth: []
  *       parameters:
@@ -1253,7 +1353,7 @@
  *           content:
  *             application/json:
  *               example:
- *                 poruka: Termin je uspesno kreiran.
+ *                 poruka: Termin je uspešno kreiran.
  *                 termin:
  *                   id: 5
  *                   dan_u_nedelji: 3
@@ -1361,7 +1461,7 @@
  *           content:
  *             application/json:
  *               example:
- *                 greska: Termin nije pronadjen.
+ *                 greska: Termin nije pronađen.
  *         "409":
  *           description: Izmjena nije dozvoljena zbog ograničenja baze.
  *           content:
@@ -1412,13 +1512,13 @@
  *           content:
  *             application/json:
  *               example:
- *                 greska: Termin nije pronadjen.
+ *                 greska: Termin nije pronađen.
  *         "409":
  *           description: Termin je povezan sa aktivnošću.
  *           content:
  *             application/json:
  *               example:
- *                 greska: Termin je povezan sa aktivnoscu.
+ *                 greska: Termin je povezan sa aktivnošću "Školski hor".
  *         "500":
  *           description: Greška pri brisanju termina.
  *           content:
