@@ -560,6 +560,26 @@
  *             application/json:
  *               example:
  *                 greska: Greška pri osvežavanju sesije.
+ *   /api/auth/odjava:
+ *     post:
+ *       tags: [Autentifikacija]
+ *       summary: Odjava trenutne sesije
+ *       description: Opoziva Supabase sesiju povezanu sa Bearer access tokenom.
+ *       security:
+ *         - bearerAuth: []
+ *       responses:
+ *         "200":
+ *           description: Korisnik je odjavljen.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 poruka: Uspešno ste odjavljeni.
+ *         "401":
+ *           description: Potreban je važeći token.
+ *           content:
+ *             application/json:
+ *               example:
+ *                 greska: Morate biti prijavljeni.
  *   /api/aktivnosti:
  *     get:
  *       tags: [Aktivnosti]

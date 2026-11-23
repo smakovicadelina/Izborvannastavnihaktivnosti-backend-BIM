@@ -1,5 +1,6 @@
 
 const { tabelaNedostaje } = require("../utils/http");
+const { dbSupabase } = require("../config/supabase");
 
 let upozorenjeIspisano = false;
 
@@ -60,5 +61,11 @@ async function obavestiUcenikeAktivnosti(db, aktivnostId, sadrzaj) {
 
 module.exports = {
   obavesti,
-  obavestiUcenikeAktivnosti
+  obavestiUcenikeAktivnosti,
+  api: {
+    obavesti: (korisnikIds, sadrzaj) =>
+      obavesti(dbSupabase, korisnikIds, sadrzaj),
+    obavestiUcenikeAktivnosti: (aktivnostId, sadrzaj) =>
+      obavestiUcenikeAktivnosti(dbSupabase, aktivnostId, sadrzaj)
+  }
 };

@@ -34,7 +34,7 @@ npm test
 
 | Oblast | Rute |
 |---|---|
-| Autentifikacija | `POST /api/auth/registracija`, `POST /api/auth/prijava`, `POST /api/auth/osvezi-token`, `GET /api/auth/me`, `GET/POST /api/auth/zahtev-za-profesora` |
+| Autentifikacija | `POST /api/auth/registracija`, `POST /api/auth/prijava`, `POST /api/auth/osvezi-token`, `POST /api/auth/odjava`, `GET /api/auth/me`, `GET/POST /api/auth/zahtev-za-profesora` |
 | Aktivnosti | `GET /api/aktivnosti?q=&kategorija_id=&interesovanje_id=&moja_interesovanja=&dan=&samo_slobodna=`, `GET /api/aktivnosti/:id`, `POST`, `PATCH /:id`, `DELETE /:id`, `PATCH /:id/deaktiviraj`, `PATCH /:id/aktiviraj` |
 | Prijave | učenik: `POST/DELETE /api/aktivnosti/:id/prijava`; profesor: `GET/POST /api/aktivnosti/:id/prijave`, `PATCH/DELETE /api/aktivnosti/:id/prijave/:prijavaId` |
 | Raspored i istorija | `GET /api/moje-prijave`, `GET /api/moje-prijave/raspored`, `GET /api/moje-prijave/istorija` |

@@ -74,6 +74,13 @@ test("registracija profesora pravi zahtjev, ali ne dodjeljuje profesorsku ulogu"
         return user
           ? { data: { user }, error: null }
           : { data: { user: null }, error: new Error("Invalid token") };
+      },
+      admin: {
+        async signOut(token, scope) {
+          return token && scope === "global"
+            ? { data: null, error: null }
+            : { data: null, error: new Error("Invalid token") };
+        }
       }
     }
   };
@@ -232,6 +239,18 @@ test("registracija profesora pravi zahtjev, ali ne dodjeljuje profesorsku ulogu"
   assert.equal(prijavaResponse.status, 200);
   assert.equal(prijava.korisnik.uloga, "ucenik");
   assert.equal(prijava.zahtev_za_profesora, undefined);
+
+  const odjavaResponse = await fetch(`${baseUrl}/api/auth/odjava`, {
+    method: "POST",
+    headers: {
+      ...headers,
+      Authorization: `Bearer ${prijava.token}`
+    }
+  });
+  assert.equal(odjavaResponse.status, 200);
+  assert.deepEqual(await odjavaResponse.json(), {
+    poruka: "Uspešno ste odjavljeni."
+  });
 
   const authHeader = {
     Authorization: `Bearer ${prijava.token}`

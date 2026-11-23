@@ -15,6 +15,7 @@ const {
   sortirajTermine,
   terminiSePreklapaju
 } = require("../utils/vreme");
+const { dbSupabase } = require("../config/supabase");
 
 const AKTIVNI_STATUSI = ["prijavljen", "na_cekanju"];
 
@@ -900,6 +901,86 @@ function prevediGreskuPrijave(error) {
   return error;
 }
 
+async function interesovanjaIdsKorisnika(korisnikId) {
+  const { data, error } = await dbSupabase
+    .from("korisnik_interesovanja")
+    .select("interesovanje_id")
+    .eq("korisnik_id", korisnikId);
+  if (error) throw error;
+  return data.map(r => r.interesovanje_id);
+}
+
+async function naziviInteresovanja(ids) {
+  const { data, error } = await dbSupabase
+    .from("interesovanja")
+    .select("naziv")
+    .in("id", ids);
+  if (error) throw error;
+  return data.map(i => i.naziv);
+}
+
+async function ucenikPoId(id) {
+  const { data, error } = await dbSupabase
+    .from("korisnici")
+    .select("id, uloga")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+function nazivAktivnosti(id) {
+  return dbSupabase
+    .from("aktivnosti")
+    .select("naziv")
+    .eq("id", id)
+    .maybeSingle();
+}
+
+async function aktivnostiPoIds(ids) {
+  const redovi = ids.length
+    ? await upit(dbSupabase.from("aktivnosti").select("*").in("id", ids))
+    : [];
+  return obogatiAktivnosti(dbSupabase, redovi);
+}
+
+async function osveziTekstTermina(aktivnostId, termini) {
+  const tekst = tekstIzTermina(termini);
+  const { error } = await dbSupabase
+    .from("aktivnosti")
+    .update(tekst)
+    .eq("id", aktivnostId);
+  if (error) throw error;
+}
+
+const api = {
+  pregledAktivnosti: filteri => pregledAktivnosti(dbSupabase, filteri),
+  aktivnostPoId: (id, opcije) => aktivnostPoId(dbSupabase, id, opcije),
+  kreirajAktivnost: (profesorId, body) => kreirajAktivnost(dbSupabase, profesorId, body),
+  urediAktivnost: (id, body) => urediAktivnost(dbSupabase, id, body),
+  postaviAktivnost: (id, aktivna) => postaviAktivnost(dbSupabase, id, aktivna),
+  obrisiAktivnost: id => obrisiAktivnost(dbSupabase, id),
+  prijaveAktivnosti: (id, options) => prijaveAktivnosti(dbSupabase, id, options),
+  proveriPreklapanjeZaUcenika: (id, aktivnost) =>
+    proveriPreklapanjeZaUcenika(dbSupabase, id, aktivnost),
+  prijaviUcenika: (ucenikId, aktivnostId) =>
+    prijaviUcenika(dbSupabase, ucenikId, aktivnostId),
+  azurirajPrijavu: (aktivnostId, prijavaId, status) =>
+    azurirajPrijavu(dbSupabase, aktivnostId, prijavaId, status),
+  obrisiPrijavu: (aktivnostId, prijavaId) =>
+    obrisiPrijavu(dbSupabase, aktivnostId, prijavaId),
+  otkaziPrijavu: (ucenikId, aktivnostId) =>
+    otkaziPrijavu(dbSupabase, ucenikId, aktivnostId),
+  zahtevajAktivnost: id => zahtevajAktivnost(dbSupabase, id),
+  interesovanjaIdsKorisnika,
+  naziviInteresovanja,
+  ucenikPoId,
+  nazivAktivnosti,
+  aktivnostiPoIds,
+  terminiAktivnosti: aktivnost => terminiAktivnosti(dbSupabase, aktivnost),
+  osveziTekstTermina
+};
+
 async function prijaviUcenika(db, ucenikId, aktivnostId) {
   const { data, error } = await db.rpc("bezbedna_prijava", {
     p_ucenik_id: ucenikId,
@@ -926,6 +1007,7 @@ async function otkaziPrijavu(db, ucenikId, aktivnostId) {
 
 module.exports = {
   AKTIVNI_STATUSI,
+  api,
   upit,
   upitOpcione,
   normalizuj,
