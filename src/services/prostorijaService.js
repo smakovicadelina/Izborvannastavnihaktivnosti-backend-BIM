@@ -1,37 +1,41 @@
+// POSLOVNA LOGIKA ZA PROSTORIJE.
+// prostorije(id, naziv UNIQUE, kapacitet > 0, opis)
+
 const { dbSupabase } = require("../config/supabase");
-const { upit } = require("./aktivnostService");
-const { preklapanjaUProstoriji, aktivnostiTermina } = require("./terminService");
 const { greska } = require("../utils/http");
+const { upit } = require("../utils/upit");
+const { nazivDana } = require("../utils/vreme");
+const { preklapanjaUProstoriji, aktivnostiTermina } = require("./terminService");
+
+const KOLONE = "id, naziv, kapacitet, opis";
 
 async function lista() {
-  const { data, error } = await dbSupabase
-    .from("prostorije")
-    .select("id, naziv, kapacitet, opis")
-    .order("naziv");
-  if (error) throw error;
-  return data || [];
+  return upit(dbSupabase.from("prostorije").select(KOLONE).order("naziv"));
 }
 
 async function detalji(id) {
   const { data, error } = await dbSupabase
     .from("prostorije")
-    .select("id, naziv, kapacitet, opis")
+    .select(KOLONE)
     .eq("id", id)
     .maybeSingle();
   if (error) throw error;
   if (!data) throw greska(404, "Prostorija nije pronađena.");
+
   const termini = await upit(
-    dbSupabase.from("termini")
+    dbSupabase
+      .from("termini")
       .select("id, dan_u_nedelji, vreme_od, vreme_do")
       .eq("prostorija_id", id)
       .order("dan_u_nedelji")
       .order("vreme_od")
   );
-  return { ...data, termini };
+  return { ...data, termini: termini.map(t => ({ ...t, dan: nazivDana(t.dan_u_nedelji) })) };
 }
 
-async function dostupnost(id, termin) {
-  const preklapanja = await preklapanjaUProstoriji(dbSupabase, termin);
+// Da li je prostorija slobodna u zadatom terminu.
+async function dostupnost(termin) {
+  const preklapanja = await preklapanjaUProstoriji(termin);
   return { dostupna: preklapanja.length === 0, preklapanja };
 }
 
@@ -45,10 +49,11 @@ async function kreiraj(unos) {
 }
 
 async function izmeni(id, unos) {
+  // Kapacitet ne sme pasti ispod broja mesta aktivnosti koje koriste prostoriju.
   if (unos.kapacitet) {
     const termini = await upit(dbSupabase.from("termini").select("id").eq("prostorija_id", id));
-    const aktivnosti = await aktivnostiTermina(dbSupabase, termini.map(t => t.id));
-    const prevelika = aktivnosti.find(a => a.aktivna && a.maksimalno_mesta > unos.kapacitet);
+    const povezane = await aktivnostiTermina(termini.map(t => t.id));
+    const prevelika = povezane.find(a => a.aktivna && a.maksimalno_mesta > unos.kapacitet);
     if (prevelika) {
       throw greska(
         409,
@@ -56,6 +61,7 @@ async function izmeni(id, unos) {
       );
     }
   }
+
   const { data, error } = await dbSupabase
     .from("prostorije")
     .update(unos)
@@ -73,13 +79,23 @@ async function izmeni(id, unos) {
 
 async function obrisi(id) {
   const { count, error: countError } = await dbSupabase
-    .from("termini").select("id", { count: "exact", head: true }).eq("prostorija_id", id);
+    .from("termini")
+    .select("id", { count: "exact", head: true })
+    .eq("prostorija_id", id);
   if (countError) throw countError;
   if (count) {
-    throw greska(409, "Prostorija ima termine i ne može se obrisati. Najpre obrišite ili premestite termine.");
+    throw greska(
+      409,
+      "Prostorija ima termine i ne može se obrisati. Najpre obrišite ili premestite termine."
+    );
   }
+
   const { data, error } = await dbSupabase
-    .from("prostorije").delete().eq("id", id).select("id").maybeSingle();
+    .from("prostorije")
+    .delete()
+    .eq("id", id)
+    .select("id")
+    .maybeSingle();
   if (error) throw error;
   if (!data) throw greska(404, "Prostorija nije pronađena.");
 }

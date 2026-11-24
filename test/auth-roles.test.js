@@ -176,6 +176,8 @@ test("registracija profesora pravi zahtjev, ali ne dodjeljuje profesorsku ulogu"
     zahtijevajProfesora,
     (req, res) => res.json({ uloga: req.profil.uloga })
   );
+  // Kao u src/app.js: greske iz middleware-a/kontrolera zavrsavaju u errorHandler-u.
+  app.use(require("../src/middleware/errorHandler"));
 
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");

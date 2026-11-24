@@ -1,23 +1,18 @@
+// Administratorski panel (samo profesor): CRUD nad ucenicima, zahtevi za
+// profesorski nalog, pregled svih prijava i statistika.
+
 const { dbSupabase } = require("../config/supabase");
-const aktivnosti = require("./aktivnostService");
+const { greska, tabelaNedostaje } = require("../utils/http");
+const { upit, sviRedovi } = require("../utils/upit");
+const { normalizuj } = require("../utils/tekst");
+const { AKTIVNI_STATUSI } = require("../utils/konstante");
 const { interesovanjaKorisnika, postaviInteresovanja } = require("./profilService");
 const { obavesti } = require("./obavestenjaService");
-const { tabelaNedostaje } = require("../utils/http");
 
 const KOLONE_UCENIKA =
   "id, ime_i_prezime, uloga, razred_odeljenje, korisnicko_ime, biografija, avatar_url, kreirano_at";
 
-async function sviRedovi(napraviUpit) {
-  const rezultat = [];
-  const korak = 1000;
-  for (let od = 0; ; od += korak) {
-    const { data, error } = await napraviUpit().range(od, od + korak - 1);
-    if (error) throw error;
-    rezultat.push(...data);
-    if (data.length < korak) return rezultat;
-  }
-}
-
+// Red iz "korisnici" koji ima ulogu ucenik, ili 404.
 async function zahtevajUcenika(id) {
   const { data, error } = await dbSupabase
     .from("korisnici")
@@ -25,26 +20,28 @@ async function zahtevajUcenika(id) {
     .eq("id", id)
     .maybeSingle();
   if (error) throw error;
+  if (!data || data.uloga !== "ucenik") throw greska(404, "Učenik nije pronađen.");
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// UCENICI - CRUD
+// ---------------------------------------------------------------------------
+
 async function listaUcenika({ q, razred }) {
-  let upit = dbSupabase
+  let upitUcenika = dbSupabase
     .from("korisnici")
     .select(KOLONE_UCENIKA)
     .eq("uloga", "ucenik")
     .order("ime_i_prezime");
-  if (typeof razred === "string" && razred.trim()) {
-    upit = upit.eq("razred_odeljenje", razred.trim());
-  }
+  if (razred) upitUcenika = upitUcenika.eq("razred_odeljenje", razred);
 
-  let ucenici = await aktivnosti.upit(upit);
-  if (typeof q === "string" && q.trim()) {
-    const trazeno = aktivnosti.normalizuj(q.trim());
+  let ucenici = await upit(upitUcenika);
+  if (q) {
+    const trazeno = normalizuj(q);
     ucenici = ucenici.filter(u =>
-      aktivnosti.normalizuj(
-        `${u.ime_i_prezime} ${u.korisnicko_ime || ""} ${u.razred_odeljenje || ""}`
-      ).includes(trazeno)
+      normalizuj(`${u.ime_i_prezime} ${u.korisnicko_ime || ""} ${u.razred_odeljenje || ""}`)
+        .includes(trazeno)
     );
   }
 
@@ -65,11 +62,14 @@ async function listaUcenika({ q, razred }) {
   }));
 }
 
+// Ucenik sa emailom, interesovanjima i svim prijavama (+ broj dolazaka/izostanaka).
 async function detaljiUcenika(id) {
+  const ucenik = await zahtevajUcenika(id);
+
   const [{ data: auth }, interesovanja, prijave] = await Promise.all([
     dbSupabase.auth.admin.getUserById(id),
     interesovanjaKorisnika(id),
-    aktivnosti.upit(
+    upit(
       dbSupabase
         .from("prijave")
         .select("id, aktivnost_id, status_prijave, prijavljen_at")
@@ -81,10 +81,10 @@ async function detaljiUcenika(id) {
   const aktivnostIds = [...new Set(prijave.map(p => p.aktivnost_id))];
   const [nazivi, prisustva] = await Promise.all([
     aktivnostIds.length
-      ? aktivnosti.upit(dbSupabase.from("aktivnosti").select("id, naziv, aktivna").in("id", aktivnostIds))
+      ? upit(dbSupabase.from("aktivnosti").select("id, naziv, aktivna").in("id", aktivnostIds))
       : [],
     prijave.length
-      ? aktivnosti.upit(
+      ? upit(
           dbSupabase
             .from("prisustva")
             .select("prijava_id, prisutan")
@@ -94,9 +94,23 @@ async function detaljiUcenika(id) {
   ]);
   const naziviPoId = new Map(nazivi.map(a => [a.id, a]));
 
-  return { auth, interesovanja, prijave, naziviPoId, prisustva };
+  return {
+    ...ucenik,
+    email: auth?.user?.email || null,
+    interesovanja,
+    prijave: prijave.map(p => {
+      const moja = prisustva.filter(x => x.prijava_id === p.id);
+      return {
+        ...p,
+        aktivnost: naziviPoId.get(p.aktivnost_id) || null,
+        broj_prisustva: moja.filter(x => x.prisutan).length,
+        broj_odsustva: moja.filter(x => !x.prisutan).length
+      };
+    })
+  };
 }
 
+// CREATE - profesor kreira ucenicki nalog (email je odmah potvrdjen).
 async function kreirajUcenika({ email, lozinka, imeIPrezime, razred, interesovanjaIds }) {
   const { data, error } = await dbSupabase.auth.admin.createUser({
     email,
@@ -104,65 +118,69 @@ async function kreirajUcenika({ email, lozinka, imeIPrezime, razred, interesovan
     email_confirm: true,
     user_metadata: { ime_i_prezime: imeIPrezime }
   });
-  if (error) throw { authError: error };
+  if (error) {
+    if (error.code === "email_exists" || /already/i.test(error.message || "")) {
+      throw greska(409, "Nalog sa ovom email adresom već postoji.");
+    }
+    throw error;
+  }
 
   const { data: profil, error: profilGreska } = await dbSupabase
     .from("korisnici")
     .upsert(
-      {
-        id: data.user.id,
-        ime_i_prezime: imeIPrezime,
-        uloga: "ucenik",
-        razred_odeljenje: razred
-      },
+      { id: data.user.id, ime_i_prezime: imeIPrezime, uloga: "ucenik", razred_odeljenje: razred },
       { onConflict: "id" }
     )
     .select(KOLONE_UCENIKA)
     .single();
-
   if (profilGreska) {
+    // Ne ostavljamo Auth nalog bez profila.
     await dbSupabase.auth.admin.deleteUser(data.user.id);
     throw profilGreska;
   }
-  if (interesovanjaIds.length) {
-    await postaviInteresovanja(profil.id, interesovanjaIds);
-  }
-  return { profil, email };
+
+  if (interesovanjaIds.length) await postaviInteresovanja(profil.id, interesovanjaIds);
+  return { ...profil, email };
 }
 
-async function izmeniUcenika(id, unos, interesovanjaIds) {
+// UPDATE
+async function izmeniUcenika(id, { unos, interesovanjaIds }) {
+  await zahtevajUcenika(id);
   if (Object.keys(unos).length) {
     const { error } = await dbSupabase.from("korisnici").update(unos).eq("id", id);
     if (error) throw error;
   }
-  if (interesovanjaIds !== undefined) {
-    await postaviInteresovanja(id, interesovanjaIds);
-  }
+  if (interesovanjaIds !== undefined) await postaviInteresovanja(id, interesovanjaIds);
+
   const ucenik = await zahtevajUcenika(id);
-  const interesovanja = await interesovanjaKorisnika(id);
-  return { ucenik, interesovanja };
+  return { ...ucenik, interesovanja: await interesovanjaKorisnika(id) };
 }
 
+// DELETE - samo ucenik bez aktivnih prijava. Brisu se i svi povezani podaci
+// (redosled je bitan zbog stranih kljuceva: prvo "deca", pa "roditelj").
 async function obrisiUcenika(id) {
+  await zahtevajUcenika(id);
+
   const { count, error } = await dbSupabase
     .from("prijave")
     .select("id", { count: "exact", head: true })
     .eq("ucenik_id", id)
-    .in("status_prijave", aktivnosti.AKTIVNI_STATUSI);
+    .in("status_prijave", AKTIVNI_STATUSI);
   if (error) throw error;
-  if (count) return { imaAktivnePrijave: true };
+  if (count) {
+    throw greska(409, "Učenik ima aktivne prijave. Najpre otkažite prijave, pa zatim obrišite nalog.");
+  }
 
-  const prijave = await aktivnosti.upit(
-    dbSupabase.from("prijave").select("id").eq("ucenik_id", id)
-  );
-  const preporuke = await aktivnosti.upit(
-    dbSupabase.from("ai_preporuke").select("id").eq("korisnik_id", id)
-  );
+  const prijave = await upit(dbSupabase.from("prijave").select("id").eq("ucenik_id", id));
+  const preporuke = await upit(dbSupabase.from("ai_preporuke").select("id").eq("korisnik_id", id));
 
   const koraci = [
-    prijave.length && (() => dbSupabase.from("prisustva").delete().in("prijava_id", prijave.map(p => p.id))),
+    prijave.length &&
+      (() => dbSupabase.from("prisustva").delete().in("prijava_id", prijave.map(p => p.id))),
     () => dbSupabase.from("prijave").delete().eq("ucenik_id", id),
-    preporuke.length && (() => dbSupabase.from("ai_preporuka_aktivnosti").delete().in("preporuka_id", preporuke.map(p => p.id))),
+    preporuke.length &&
+      (() =>
+        dbSupabase.from("ai_preporuka_aktivnosti").delete().in("preporuka_id", preporuke.map(p => p.id))),
     () => dbSupabase.from("ai_preporuke").delete().eq("korisnik_id", id),
     () => dbSupabase.from("korisnik_interesovanja").delete().eq("korisnik_id", id),
     () => dbSupabase.from("obavestenja").delete().eq("korisnik_id", id),
@@ -177,19 +195,22 @@ async function obrisiUcenika(id) {
 
   const { error: authGreska } = await dbSupabase.auth.admin.deleteUser(id);
   if (authGreska) console.error("Brisanje Auth naloga:", authGreska);
-  return { imaAktivnePrijave: false };
 }
 
+// ---------------------------------------------------------------------------
+// ZAHTEVI ZA PROFESORSKI NALOG
+// ---------------------------------------------------------------------------
+
 async function listaZahteva(status) {
-  let upit = dbSupabase
+  let q = dbSupabase
     .from("zahtevi_za_profesora")
     .select("id, korisnik_id, status, kreiran_at, obradjen_at")
     .order("kreiran_at", { ascending: false });
-  if (status) upit = upit.eq("status", status);
+  if (status) q = q.eq("status", status);
 
-  const zahtevi = await aktivnosti.upit(upit);
+  const zahtevi = await upit(q);
   const korisnici = zahtevi.length
-    ? await aktivnosti.upit(
+    ? await upit(
         dbSupabase
           .from("korisnici")
           .select("id, ime_i_prezime, uloga")
@@ -200,6 +221,7 @@ async function listaZahteva(status) {
   return zahtevi.map(z => ({ ...z, korisnik: poId.get(z.korisnik_id) || null }));
 }
 
+// Odobravanje menja ulogu korisnika u "profesor"; korisnik dobija obavestenje.
 async function obradiZahtev(id, status) {
   const { data: zahtev, error } = await dbSupabase
     .from("zahtevi_za_profesora")
@@ -207,8 +229,8 @@ async function obradiZahtev(id, status) {
     .eq("id", id)
     .maybeSingle();
   if (error) throw error;
-  if (!zahtev) return { notFound: true };
-  if (zahtev.status !== "na_cekanju") return { alreadyProcessed: true };
+  if (!zahtev) throw greska(404, "Zahtev nije pronađen.");
+  if (zahtev.status !== "na_cekanju") throw greska(409, "Zahtev je već obrađen.");
 
   if (status === "odobren") {
     const { data: promenjen, error: ulogaGreska } = await dbSupabase
@@ -219,7 +241,7 @@ async function obradiZahtev(id, status) {
       .select("id")
       .maybeSingle();
     if (ulogaGreska) throw ulogaGreska;
-    if (!promenjen) return { invalidProfile: true };
+    if (!promenjen) throw greska(409, "Profil ne postoji ili više nema ulogu ucenik.");
   }
 
   const { data, error: obradaGreska } = await dbSupabase
@@ -231,34 +253,49 @@ async function obradiZahtev(id, status) {
     .maybeSingle();
   if (obradaGreska) throw obradaGreska;
 
-  await obavesti(dbSupabase, [zahtev.korisnik_id], {
+  await obavesti([zahtev.korisnik_id], {
     tip: "zahtev_za_profesora",
-    naslov: status === "odobren" ? "Profesorski nalog je odobren" : "Zahtev za profesorski nalog je odbijen",
-    poruka:
-      status === "odobren"
-        ? "Vaš nalog sada ima profesorska ovlašćenja. Prijavite se ponovo."
-        : "Vaš zahtev za profesorski nalog nije odobren."
+    naslov: status === "odobren"
+      ? "Profesorski nalog je odobren"
+      : "Zahtev za profesorski nalog je odbijen",
+    poruka: status === "odobren"
+      ? "Vaš nalog sada ima profesorska ovlašćenja. Prijavite se ponovo."
+      : "Vaš zahtev za profesorski nalog nije odobren."
   });
-  return { zahtev: data };
+  return data;
 }
 
-async function listaPrijava({ status, aktivnost_id }) {
+// ---------------------------------------------------------------------------
+// PRIJAVE I STATISTIKA
+// ---------------------------------------------------------------------------
+
+async function listaPrijava({ status, aktivnostId }) {
   const prijave = await sviRedovi(() => {
     let q = dbSupabase
       .from("prijave")
       .select("id, ucenik_id, aktivnost_id, status_prijave, prijavljen_at")
       .order("prijavljen_at", { ascending: false });
     if (status) q = q.eq("status_prijave", status);
-    if (aktivnost_id !== undefined) q = q.eq("aktivnost_id", aktivnost_id);
+    if (aktivnostId !== undefined) q = q.eq("aktivnost_id", aktivnostId);
     return q;
   });
 
   const [ucenici, akt] = await Promise.all([
     prijave.length
-      ? aktivnosti.upit(dbSupabase.from("korisnici").select("id, ime_i_prezime, razred_odeljenje").in("id", [...new Set(prijave.map(p => p.ucenik_id))]))
+      ? upit(
+          dbSupabase
+            .from("korisnici")
+            .select("id, ime_i_prezime, razred_odeljenje")
+            .in("id", [...new Set(prijave.map(p => p.ucenik_id))])
+        )
       : [],
     prijave.length
-      ? aktivnosti.upit(dbSupabase.from("aktivnosti").select("id, naziv").in("id", [...new Set(prijave.map(p => p.aktivnost_id))]))
+      ? upit(
+          dbSupabase
+            .from("aktivnosti")
+            .select("id, naziv")
+            .in("id", [...new Set(prijave.map(p => p.aktivnost_id))])
+        )
       : []
   ]);
   const uceniciPoId = new Map(ucenici.map(u => [u.id, u]));
@@ -275,7 +312,9 @@ const procenat = (deo, celina) => (celina ? Math.round((deo / celina) * 1000) / 
 async function statistika() {
   const [korisnici, svaAkt, prijave, prisustva, kategorije] = await Promise.all([
     sviRedovi(() => dbSupabase.from("korisnici").select("id, uloga")),
-    sviRedovi(() => dbSupabase.from("aktivnosti").select("id, naziv, aktivna, maksimalno_mesta, kategorija_id")),
+    sviRedovi(() =>
+      dbSupabase.from("aktivnosti").select("id, naziv, aktivna, maksimalno_mesta, kategorija_id")
+    ),
     sviRedovi(() => dbSupabase.from("prijave").select("id, ucenik_id, aktivnost_id, status_prijave")),
     sviRedovi(() => dbSupabase.from("prisustva").select("prijava_id, prisutan")),
     sviRedovi(() => dbSupabase.from("kategorije").select("id, naziv"))
@@ -283,6 +322,7 @@ async function statistika() {
 
   const prijavaAktivnost = new Map(prijave.map(p => [p.id, p.aktivnost_id]));
   const kategorijePoId = new Map(kategorije.map(k => [k.id, k.naziv]));
+
   const poAktivnostima = svaAkt.map(a => {
     const moje = prijave.filter(p => p.aktivnost_id === a.id);
     const prijavljeno = moje.filter(p => p.status_prijave === "prijavljen").length;
@@ -309,15 +349,18 @@ async function statistika() {
   const ukupnoMesta = aktivne.reduce((s, a) => s + a.maksimalno_mesta, 0);
   const ukupnoPrijavljenih = aktivne.reduce((s, a) => s + a.broj_prijavljenih, 0);
   const ukupnoPrisutno = prisustva.filter(x => x.prisutan).length;
-  const poKategorijama = [...new Set(poAktivnostima.map(a => a.kategorija))].map(k => {
-    const grupa = poAktivnostima.filter(a => a.kategorija === k);
-    return {
-      kategorija: k || "Bez kategorije",
-      broj_aktivnosti: grupa.length,
-      broj_prijavljenih: grupa.reduce((s, a) => s + a.broj_prijavljenih, 0),
-      ukupno_prijava: grupa.reduce((s, a) => s + a.ukupno_prijava, 0)
-    };
-  }).sort((a, b) => b.ukupno_prijava - a.ukupno_prijava);
+
+  const poKategorijama = [...new Set(poAktivnostima.map(a => a.kategorija))]
+    .map(k => {
+      const grupa = poAktivnostima.filter(a => a.kategorija === k);
+      return {
+        kategorija: k || "Bez kategorije",
+        broj_aktivnosti: grupa.length,
+        broj_prijavljenih: grupa.reduce((s, a) => s + a.broj_prijavljenih, 0),
+        ukupno_prijava: grupa.reduce((s, a) => s + a.ukupno_prijava, 0)
+      };
+    })
+    .sort((a, b) => b.ukupno_prijava - a.ukupno_prijava);
 
   return {
     ukupno: {
@@ -344,8 +387,6 @@ async function statistika() {
 }
 
 module.exports = {
-  KOLONE_UCENIKA,
-  zahtevajUcenika,
   listaUcenika,
   detaljiUcenika,
   kreirajUcenika,

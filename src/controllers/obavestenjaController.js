@@ -1,27 +1,26 @@
-const { zahtevajId } = require("../utils/http");
-const servis = require("../services/obavestenjaQueryService");
+const obavestenjaService = require("../services/obavestenjaService");
 
+// GET /api/obavestenja?neprocitana=true&limit=50
 async function pregled(req, res) {
-  const samoNeprocitana = ["true", "1"].includes(String(req.query.neprocitana));
-  const limit = Math.min(Number(req.query.limit) || 50, 200);
-  return res.json(await servis.lista(req.korisnik.id, samoNeprocitana, limit));
+  return res.status(200).json(await obavestenjaService.lista(req.korisnik.id, req.podaci));
 }
 
+// PATCH /api/obavestenja/procitaj-sve
 async function procitajSve(req, res) {
-  await servis.procitajSve(req.korisnik.id);
-  return res.json({ poruka: "Sva obaveštenja su označena kao pročitana." });
+  await obavestenjaService.procitajSve(req.korisnik.id);
+  return res.status(200).json({ poruka: "Sva obaveštenja su označena kao pročitana." });
 }
 
+// PATCH /api/obavestenja/:id/procitano
 async function procitajJedno(req, res) {
-  const id = zahtevajId(req.params.id, "Neispravan ID obaveštenja.");
-  const data = await servis.procitajJedno(id, req.korisnik.id);
-  return res.json({ obavestenje: data });
+  const obavestenje = await obavestenjaService.procitajJedno(req.podaci.id, req.korisnik.id);
+  return res.status(200).json({ obavestenje });
 }
 
+// DELETE /api/obavestenja/:id
 async function obrisi(req, res) {
-  const id = zahtevajId(req.params.id, "Neispravan ID obaveštenja.");
-  await servis.obrisi(id, req.korisnik.id);
-  return res.json({ poruka: "Obaveštenje je obrisano." });
+  await obavestenjaService.obrisi(req.podaci.id, req.korisnik.id);
+  return res.status(200).json({ poruka: "Obaveštenje je obrisano." });
 }
 
 module.exports = { pregled, procitajSve, procitajJedno, obrisi };

@@ -1,48 +1,42 @@
-
+// /api/aktivnosti - aktivnosti i prijave na njih
 const express = require("express");
-
-const kontroler = require("../controllers/aktivnostController");
 const zahtevajPrijavu = require("../middleware/zahtevajPrijavu");
 const { opcionaPrijava } = require("../middleware/zahtevajPrijavu");
 const zahtevajUlogu = require("../middleware/zahtevajUlogu");
+const validiraj = require("../middleware/validiraj");
+const v = require("../validators/aktivnostValidator");
+const vp = require("../validators/prijavaValidator");
+const kontroler = require("../controllers/aktivnostController");
+const prijave = require("../controllers/prijavaController");
 
 const router = express.Router();
 const profesor = [zahtevajPrijavu, zahtevajUlogu("profesor")];
 const ucenik = [zahtevajPrijavu, zahtevajUlogu("ucenik")];
 
-// PREGLED, PRETRAGA I FILTRIRANJE AKTIVNOSTI (javno; token je opcion)
-router.get("/", opcionaPrijava, kontroler.pregled);
+// READ - pregled, pretraga i filtriranje (javno; token je opcion)
+router.get("/", opcionaPrijava, validiraj(v.pregled), kontroler.pregled);
+router.get("/:aktivnostId", opcionaPrijava, validiraj(v.samoId), kontroler.detalji);
+// Slobodna mesta (zadrzano zbog kompatibilnosti sa frontendom; isto sto i detalji)
+router.get("/:aktivnostId/mesta", zahtevajPrijavu, validiraj(v.samoId), kontroler.detalji);
 
-// DETALJI AKTIVNOSTI
-router.get("/:aktivnostId", opcionaPrijava, kontroler.detalji);
+// CREATE / UPDATE / DELETE - samo profesor
+router.post("/", ...profesor, validiraj(v.kreiranje), kontroler.kreiranje);
+router.patch("/:aktivnostId", ...profesor, validiraj(v.uredivanje), kontroler.uredivanje);
+router.delete("/:aktivnostId", ...profesor, validiraj(v.samoId), kontroler.brisanje);
+router.patch("/:aktivnostId/deaktiviraj", ...profesor, validiraj(v.samoId), kontroler.deaktiviranje);
+router.patch("/:aktivnostId/aktiviraj", ...profesor, validiraj(v.samoId), kontroler.aktiviranje);
 
-// SLOBODNA MESTA (zadrzano zbog kompatibilnosti sa frontendom)
-router.get("/:aktivnostId/mesta", zahtevajPrijavu, kontroler.mesta);
+// QR kod za evidenciju prisustva - profesor
+router.get("/:aktivnostId/qr", ...profesor, validiraj(v.qrKod), kontroler.qrKod);
 
-// PROFESOR - KREIRANJE AKTIVNOSTI
-router.post("/", ...profesor, kontroler.kreiranje);
+// PRIJAVE - profesor upravlja prijavama na aktivnost
+router.get("/:aktivnostId/prijave", ...profesor, validiraj(vp.pregled), prijave.pregled);
+router.post("/:aktivnostId/prijave", ...profesor, validiraj(vp.upis), prijave.upis);
+router.patch("/:aktivnostId/prijave/:prijavaId", ...profesor, validiraj(vp.promenaStatusa), prijave.promenaStatusa);
+router.delete("/:aktivnostId/prijave/:prijavaId", ...profesor, validiraj(vp.brisanje), prijave.brisanje);
 
-// PROFESOR - UREDJIVANJE
-router.patch("/:aktivnostId", ...profesor, kontroler.uredivanje);
-
-// PROFESOR - BRISANJE (samo aktivnost bez prijava)
-router.delete("/:aktivnostId", ...profesor, kontroler.brisanje);
-
-// PROFESOR - DEAKTIVACIJA / AKTIVACIJA
-router.patch("/:aktivnostId/deaktiviraj", ...profesor, kontroler.deaktiviranje);
-router.patch("/:aktivnostId/aktiviraj", ...profesor, kontroler.aktiviranje);
-
-// PROFESOR - QR KOD ZA PRISUSTVO
-router.get("/:aktivnostId/qr", ...profesor, kontroler.qrKod);
-
-// PROFESOR - UPRAVLJANJE PRIJAVAMA
-router.get("/:aktivnostId/prijave", ...profesor, kontroler.prijaveAktivnosti);
-router.post("/:aktivnostId/prijave", ...profesor, kontroler.upisUcenika);
-router.patch("/:aktivnostId/prijave/:prijavaId", ...profesor, kontroler.azurirajPrijavu);
-router.delete("/:aktivnostId/prijave/:prijavaId", ...profesor, kontroler.brisanjePrijave);
-
-// UCENIK - PRIJAVA I OTKAZIVANJE
-router.post("/:aktivnostId/prijava", ...ucenik, kontroler.prijava);
-router.delete("/:aktivnostId/prijava", ...ucenik, kontroler.otkazivanje);
+// PRIJAVA - ucenik se prijavljuje / otkazuje
+router.post("/:aktivnostId/prijava", ...ucenik, validiraj(vp.ucenikovaPrijava), prijave.prijava);
+router.delete("/:aktivnostId/prijava", ...ucenik, validiraj(vp.ucenikovaPrijava), prijave.otkazivanje);
 
 module.exports = router;

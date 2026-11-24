@@ -250,17 +250,6 @@
  *               example:
  *                 status: ok
  *                 poruka: Backend server radi!
- *   /api/test-verzija:
- *     get:
- *       tags: [Opšte]
- *       summary: Provjera aktivne verzije backend-a
- *       responses:
- *         "200":
- *           description: Identifikator verzije servera.
- *           content:
- *             application/json:
- *               example:
- *                 verzija: NOVA_VERZIJA_37
  *   /api-docs.json:
  *     get:
  *       tags: [Opšte]

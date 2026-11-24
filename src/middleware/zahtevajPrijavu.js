@@ -1,8 +1,14 @@
+// AUTENTIFIKACIJA - provera ko salje zahtev.
+//
+// Klijent (Postman, React Native aplikacija) salje zaglavlje:
+//   Authorization: Bearer <access_token>
+// Token je dobijen pri prijavi (POST /api/auth/prijava). Middleware ga
+// proverava kod Supabase Auth-a, ucitava profil iz tabele "korisnici" i
+// upisuje ga u req.korisnik / req.profil, pa ga kontroleri i servisi koriste
+// (npr. req.korisnik.id kao ID ulogovanog ucenika).
 
-const {
-  authSupabase,
-  dbSupabase
-} = require("../config/supabase");
+const { authSupabase, dbSupabase } = require("../config/supabase");
+const { greska } = require("../utils/http");
 
 function izvuciToken(req) {
   const authorization = req.headers.authorization || "";
@@ -10,12 +16,12 @@ function izvuciToken(req) {
   return match ? match[1] : null;
 }
 
-// Vraca { korisnik, profil } ili baca objekat { status, greska }.
+// Vraca { korisnik, profil } ili baca HttpGreska (401/403).
 async function ucitajKorisnika(token) {
+  // Supabase proverava potpis i rok vazenja JWT tokena.
   const { data, error } = await authSupabase.auth.getUser(token);
-
   if (error || !data?.user) {
-    throw { status: 401, greska: "Nevažeći ili istekao token." };
+    throw greska(401, "Nevažeći ili istekao token.");
   }
 
   const { data: profil, error: profilGreska } = await dbSupabase
@@ -24,48 +30,29 @@ async function ucitajKorisnika(token) {
     .eq("id", data.user.id)
     .maybeSingle();
 
-  if (profilGreska) {
-    console.error("Provera korisničkog profila:", profilGreska);
-    throw { status: 500, greska: "Greška pri proveri korisnika." };
-  }
-
-  if (!profil) {
-    throw { status: 403, greska: "Korisnički profil ne postoji." };
-  }
+  if (profilGreska) throw profilGreska;
+  if (!profil) throw greska(403, "Korisnički profil ne postoji.");
 
   return { korisnik: data.user, profil };
 }
 
+// Za zasticene rute: bez ispravnog tokena zahtev se odbija sa 401.
 async function zahtevajPrijavu(req, res, next) {
   try {
     const token = izvuciToken(req);
-
-    if (!token) {
-      return res.status(401).json({
-        greska: "Morate biti prijavljeni."
-      });
-    }
+    if (!token) throw greska(401, "Morate biti prijavljeni.");
 
     const { korisnik, profil } = await ucitajKorisnika(token);
     req.korisnik = korisnik;
     req.profil = profil;
-
     return next();
   } catch (error) {
-    if (error && error.status && error.greska) {
-      return res.status(error.status).json({ greska: error.greska });
-    }
-
-    console.error("Autentifikacija:", error);
-
-    return res.status(500).json({
-      greska: "Greška pri autentifikaciji."
-    });
+    return next(error);
   }
 }
 
 // Za javne rute: ako je token poslat i ispravan, popunjava req.korisnik/req.profil,
-// a u suprotnom nastavlja kao anonimni korisnik.
+// a u suprotnom zahtev nastavlja kao anonimni.
 async function opcionaPrijava(req, res, next) {
   const token = izvuciToken(req);
   if (!token) return next();
@@ -77,7 +64,6 @@ async function opcionaPrijava(req, res, next) {
   } catch {
     // Neispravan token na javnoj ruti tretiramo kao anonimni zahtev.
   }
-
   return next();
 }
 

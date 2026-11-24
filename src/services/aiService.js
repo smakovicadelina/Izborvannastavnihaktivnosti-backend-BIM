@@ -6,7 +6,7 @@
 // ne uspe) koristi se lokalni algoritam podudaranja kljucnih reci, tako da
 // funkcionalnost radi i bez spoljnog servisa.
 
-const { normalizuj } = require("./aktivnostService");
+const { normalizuj } = require("../utils/tekst");
 const { opisTermina } = require("../utils/vreme");
 
 const MODEL = process.env.AI_MODEL || "claude-opus-5-5";
